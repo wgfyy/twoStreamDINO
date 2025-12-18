@@ -7,6 +7,7 @@ from .base_video_dataset import BaseVideoDataset
 from .cityscapes import CityscapesDataset
 from .coco import CocoDataset
 from .coco_caption import CocoCaptionDataset
+from .dual_modal_coco import DualModalCocoDataset
 from .coco_panoptic import CocoPanopticDataset
 from .coco_semantic import CocoSegDataset
 from .crowdhuman import CrowdHumanDataset
@@ -41,5 +42,5 @@ __all__ = [
     'ReIDDataset', 'YouTubeVISDataset', 'TrackAspectRatioBatchSampler',
     'ADE20KPanopticDataset', 'CocoCaptionDataset', 'RefCocoDataset',
     'BaseSegDataset', 'ADE20KSegDataset', 'CocoSegDataset',
-    'ADE20KInstanceDataset', 'iSAIDDataset'
+    'ADE20KInstanceDataset', 'iSAIDDataset', 'DualModalCocoDataset'
 ]

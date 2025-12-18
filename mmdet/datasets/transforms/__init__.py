@@ -13,6 +13,10 @@ from .loading import (FilterAnnotations, InferencerLoader, LoadAnnotations,
                       LoadEmptyAnnotations, LoadImageFromNDArray,
                       LoadMultiChannelImageFromFiles, LoadPanopticAnnotations,
                       LoadProposals, LoadTrackAnnotations)
+from .dual_modal_transforms import (LoadDualModalImagesFromFile,
+                                    DualModalRandomFlip, DualModalResize,
+                                    PackDualModalDetInputs,
+                                    DualModalRandomChoiceResize)
 from .transforms import (Albu, CachedMixUp, CachedMosaic, CopyPaste, CutOut,
                          Expand, FixScaleResize, FixShapeResize,
                          MinIoURandomCrop, MixUp, Mosaic, Pad,
@@ -37,5 +41,7 @@ __all__ = [
     'LoadEmptyAnnotations', 'RandomOrder', 'CachedMosaic', 'CachedMixUp',
     'FixShapeResize', 'ProposalBroadcaster', 'InferencerLoader',
     'LoadTrackAnnotations', 'BaseFrameSample', 'UniformRefFrameSample',
-    'PackTrackInputs', 'PackReIDInputs', 'FixScaleResize', 'ResizeShortestEdge'
+    'PackTrackInputs', 'PackReIDInputs', 'FixScaleResize', 'ResizeShortestEdge',
+    'LoadDualModalImagesFromFile', 'DualModalRandomFlip', 'DualModalResize',
+    'PackDualModalDetInputs', 'DualModalRandomChoiceResize'
 ]
