@@ -181,17 +181,12 @@ class DualModalRandomFlip(BaseTransform):
             results['flip'] = True
             results['flip_direction'] = self.direction
             
-            # Flip bboxes
+            # Flip bboxes - use MMDetection 3.x Box API
             if 'gt_bboxes' in results:
                 h, w = results['img_shape']
                 bboxes = results['gt_bboxes']
-                if self.direction == 'horizontal':
-                    bboxes[:, [0, 2]] = w - bboxes[:, [2, 0]]
-                elif self.direction == 'vertical':
-                    bboxes[:, [1, 3]] = h - bboxes[:, [3, 1]]
-                else:
-                    bboxes[:, [0, 2]] = w - bboxes[:, [2, 0]]
-                    bboxes[:, [1, 3]] = h - bboxes[:, [3, 1]]
+                # MMDetection 3.x uses BaseBoxes, call flip_ method (in-place)
+                bboxes.flip_(img_shape=(h, w), direction=self.direction)
                 results['gt_bboxes'] = bboxes
         else:
             results['flip'] = False
@@ -278,12 +273,18 @@ class DualModalResize(BaseTransform):
         results['scale_factor'] = (w_scale, h_scale)
         results['keep_ratio'] = self.keep_ratio
         
-        # Scale bboxes
+        # Scale bboxes - compatible with MMDetection 3.x Box types
         if 'gt_bboxes' in results:
             bboxes = results['gt_bboxes']
-            bboxes[:, [0, 2]] = bboxes[:, [0, 2]] * w_scale
-            bboxes[:, [1, 3]] = bboxes[:, [1, 3]] * h_scale
-            results['gt_bboxes'] = bboxes
+            # Use the rescale method if bboxes is a BaseBoxes instance
+            if hasattr(bboxes, 'rescale_'):
+                bboxes.rescale_([w_scale, h_scale])
+                results['gt_bboxes'] = bboxes
+            else:
+                # Fallback for numpy array or tensor
+                bboxes[:, [0, 2]] = bboxes[:, [0, 2]] * w_scale
+                bboxes[:, [1, 3]] = bboxes[:, [1, 3]] * h_scale
+                results['gt_bboxes'] = bboxes
         
         return results
 
@@ -344,9 +345,15 @@ class PackDualModalDetInputs(BaseTransform):
         
         if 'gt_bboxes' in results:
             gt_bboxes = results['gt_bboxes']
-            if not isinstance(gt_bboxes, torch.Tensor):
-                gt_bboxes = torch.from_numpy(gt_bboxes).float()
-            instance_data.bboxes = gt_bboxes
+            # Handle different bbox types (BaseBoxes, Tensor, ndarray)
+            if hasattr(gt_bboxes, 'tensor'):
+                # It's a BaseBoxes instance (e.g., HorizontalBoxes)
+                instance_data.bboxes = gt_bboxes
+            elif isinstance(gt_bboxes, torch.Tensor):
+                instance_data.bboxes = gt_bboxes
+            else:
+                # Convert numpy array to tensor
+                instance_data.bboxes = torch.from_numpy(gt_bboxes).float()
         
         if 'gt_bboxes_labels' in results:
             gt_labels = results['gt_bboxes_labels']

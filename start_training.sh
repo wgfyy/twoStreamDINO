@@ -1,0 +1,29 @@
+#!/bin/bash
+# 双流DINO训练启动脚本
+
+# 激活conda环境
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate mmdet
+
+# 设置 Python 路径
+export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+
+CONFIG="configs/dino/dual_stream_dino_r50_dota5cls.py"
+WORK_DIR="work_dirs/dual_stream_dino_r50_dota5cls"
+
+echo "=========================================="
+echo "双流DINO训练 - 可见光+SAR融合检测"
+echo "=========================================="
+echo "配置文件: $CONFIG"
+echo "工作目录: $WORK_DIR"
+echo ""
+echo "数据集信息:"
+echo "  - 训练样本: 6136 张"
+echo "  - 标注数量: 90329 个"
+echo "  - 类别: plane, ship, harbor, bridge, helicopter"
+echo ""
+echo "开始训练..."
+echo "=========================================="
+
+# python tools/train.py $CONFIG --work-dir $WORK_DIR
+python tools/train.py configs/dino/dual_stream_dino_r50_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50_dota5cls

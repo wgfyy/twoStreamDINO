@@ -8,6 +8,8 @@ from .cityscapes import CityscapesDataset
 from .coco import CocoDataset
 from .coco_caption import CocoCaptionDataset
 from .dual_modal_coco import DualModalCocoDataset
+from .dual_modal_dota import (DualModalDOTADataset, DualModalDOTAv15Dataset,
+                              DualModalDOTAv2Dataset)
 from .coco_panoptic import CocoPanopticDataset
 from .coco_semantic import CocoSegDataset
 from .crowdhuman import CrowdHumanDataset
@@ -42,5 +44,6 @@ __all__ = [
     'ReIDDataset', 'YouTubeVISDataset', 'TrackAspectRatioBatchSampler',
     'ADE20KPanopticDataset', 'CocoCaptionDataset', 'RefCocoDataset',
     'BaseSegDataset', 'ADE20KSegDataset', 'CocoSegDataset',
-    'ADE20KInstanceDataset', 'iSAIDDataset', 'DualModalCocoDataset'
+    'ADE20KInstanceDataset', 'iSAIDDataset', 'DualModalCocoDataset',
+    'DualModalDOTADataset', 'DualModalDOTAv15Dataset', 'DualModalDOTAv2Dataset'
 ]
