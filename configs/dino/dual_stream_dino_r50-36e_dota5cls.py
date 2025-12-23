@@ -225,7 +225,7 @@ optim_wrapper = dict(
         }))
 
 # 学习率调度
-max_epochs = 12
+max_epochs = 36
 train_cfg = dict(
     type='EpochBasedTrainLoop', max_epochs=max_epochs, val_interval=1)
 
@@ -238,7 +238,7 @@ param_scheduler = [
         begin=0,
         end=max_epochs,
         by_epoch=True,
-        milestones=[8, 11],
+        milestones=[24, 33],
         gamma=0.1)
 ]
 

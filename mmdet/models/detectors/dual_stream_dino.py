@@ -103,6 +103,7 @@ class DualStreamDINO(DINO):
         backbone: ConfigType,
         backbone2: ConfigType,
         fusion_module: OptConfigType = None,
+        modality_drop_prob: float = 0.0,
         neck: OptConfigType = None,
         encoder: OptConfigType = None,
         decoder: OptConfigType = None,
@@ -121,6 +122,7 @@ class DualStreamDINO(DINO):
         # Store backbone2 config before calling super().__init__
         self.backbone2_cfg = backbone2
         self.fusion_module_cfg = fusion_module
+        
         
         super().__init__(
             backbone=backbone,
@@ -142,6 +144,7 @@ class DualStreamDINO(DINO):
         
         # Build the second backbone
         self.backbone2 = MODELS.build(self.backbone2_cfg)
+        self.modality_drop_prob = modality_drop_prob
         
         # Build the feature fusion module
         if self.fusion_module_cfg is not None:
@@ -171,8 +174,28 @@ class DualStreamDINO(DINO):
         # Split the input into two modalities
         # Assuming input shape is (B, 6, H, W) with 3+3 channels
         img1 = batch_inputs[:, :3, :, :]  # First modality (e.g., RGB)
-        img2 = batch_inputs[:, 3:, :, :]  # Second modality (e.g., Thermal)
+        img2 = batch_inputs[:, 3:, :, :]  # Second modality (e.g., Thermal/Depth)
         
+        # 2. 随机模态丢弃逻辑，用于提升在模态丢失情况下单模态推理的鲁棒性 (仅在训练模式下生效)
+        if self.training and self.modality_drop_prob > 0:
+            # 生成一个随机数
+            rand_val = torch.rand(1).item()
+            
+            # 策略：
+            # 0 ~ p: 丢弃 img1 (可见光丢失)
+            # p ~ 2p: 丢弃 img2 (SAR丢失)
+            # 2p ~ 1: 两个都保留
+            # 注意：我们要避免同时丢弃两个模态，否则没法训练
+            
+            if rand_val < self.modality_drop_prob:
+                # 丢弃modality1 (将 tensor 设为全0)
+                # 使用 zeros_like 保持设备(device)和类型(dtype)一致
+                img1 = torch.zeros_like(img1)
+                
+            elif rand_val < (2 * self.modality_drop_prob):
+                # 丢弃 modality2
+                img2 = torch.zeros_like(img2)
+
         # Extract features from both backbones
         feats1 = self.backbone(img1)
         feats2 = self.backbone2(img2)
