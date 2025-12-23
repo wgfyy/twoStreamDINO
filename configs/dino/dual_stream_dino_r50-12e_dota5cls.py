@@ -12,7 +12,7 @@ num_classes = 5
 # ==================== 模型配置 ====================
 model = dict(
     type='DualStreamDINO',
-    modality_drop_prob=0.1,
+    modality_drop_prob=0.0,
     num_queries=900,
     with_box_refine=True,
     as_two_stage=True,

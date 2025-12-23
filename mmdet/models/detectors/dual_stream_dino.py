@@ -82,6 +82,12 @@ class SpatialCrossAttentionBlock(nn.Module):
         out_channels (int): Number of output channels.
         norm_cfg (dict): Config for normalization layer.
         act_cfg (dict): Config for activation layer.
+    改进方向：
+        将交叉注意力机制与FPN的思想结合，在不同尺度上进行双向交叉注意力融合.
+        可能的实现途径：
+        1.先交叉注意力，再FPN
+        2.直接在交叉的时候，就使用类似于模态1的C5层的Query去查询模态2的C4层的Key/Value，以此类推
+        3.先FPN，然后两个模态的多尺度特征之间进行交叉注意力融合
     """
     
     def __init__(self, in_channels, out_channels, norm_cfg, act_cfg):
