@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 from mmdet.registry import MODELS
@@ -12,7 +13,7 @@ from .dino import DINO
 
 
 @MODELS.register_module()
-class FeatureFusionModule(nn.Module):
+class SimpleChannelFusion(nn.Module):
     """Feature Fusion Module for dual-stream backbone outputs.
     
     This module fuses features from two modalities by concatenation 
@@ -66,6 +67,145 @@ class FeatureFusionModule(nn.Module):
             # Apply 1x1 conv for channel reduction
             fused_feat = fusion_conv(concat_feat)
             fused_feats.append(fused_feat)
+        return tuple(fused_feats)
+
+
+class SpatialCrossAttentionBlock(nn.Module):
+    """Spatial Cross-Attention Block for bidirectional feature interaction.
+    
+    This block performs bidirectional cross-attention between two modalities:
+    - Branch 1: RGB queries SAR (SAR as Key/Value, RGB as Query)
+    - Branch 2: SAR queries RGB (RGB as Key/Value, SAR as Query)
+    
+    Args:
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
+        norm_cfg (dict): Config for normalization layer.
+        act_cfg (dict): Config for activation layer.
+    """
+    
+    def __init__(self, in_channels, out_channels, norm_cfg, act_cfg):
+        super().__init__()
+        
+        # Reduce dimension to reduce computation (usually 1/2 or 1/8)
+        inter_channels = in_channels // 2
+        
+        # 1. Modality 1 (RGB) transformation layers
+        self.conv_q1 = nn.Conv2d(in_channels, inter_channels, kernel_size=1)
+        self.conv_k1 = nn.Conv2d(in_channels, inter_channels, kernel_size=1)
+        self.conv_v1 = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        
+        # 2. Modality 2 (SAR) transformation layers
+        self.conv_q2 = nn.Conv2d(in_channels, inter_channels, kernel_size=1)
+        self.conv_k2 = nn.Conv2d(in_channels, inter_channels, kernel_size=1)
+        self.conv_v2 = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        
+        # 3. Final fusion layer
+        self.output_conv = nn.Sequential(
+            nn.Conv2d(in_channels * 2, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels) if norm_cfg['type'] == 'BN' else nn.GroupNorm(32, out_channels),
+            nn.ReLU(inplace=True) if act_cfg['type'] == 'ReLU' else nn.Identity()
+        )
+        
+        # Learnable parameters Gamma to control attention strength
+        self.gamma1 = nn.Parameter(torch.zeros(1))
+        self.gamma2 = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x1, x2):
+        """Forward function.
+        
+        Args:
+            x1 (Tensor): Visible feature [B, C, H, W]
+            x2 (Tensor): SAR feature [B, C, H, W]
+            
+        Returns:
+            Tensor: Fused feature [B, out_channels, H, W]
+        """
+        B, C, H, W = x1.size()
+        
+        # --- Branch 1: SAR assists RGB (SAR as Key/Value, RGB as Query) ---
+        # Logic: RGB wants to see where SAR has strong responses
+        q1 = self.conv_q1(x1).view(B, -1, H * W).permute(0, 2, 1)  # B, N, C'
+        k2 = self.conv_k2(x2).view(B, -1, H * W)                   # B, C', N
+        v2 = self.conv_v2(x2).view(B, -1, H * W)                   # B, C, N
+        
+        # Attention Map: RGB Query finds SAR Key
+        attn12 = torch.bmm(q1, k2)  # B, N, N (spatial attention matrix)
+        attn12 = F.softmax(attn12, dim=-1)
+        
+        # Aggregate SAR's Value to RGB
+        out1 = torch.bmm(v2, attn12.permute(0, 2, 1)).view(B, C, H, W)
+        x1_new = self.gamma1 * out1 + x1  # Residual connection
+        
+        # --- Branch 2: RGB assists SAR (RGB as Key/Value, SAR as Query) ---
+        q2 = self.conv_q2(x2).view(B, -1, H * W).permute(0, 2, 1)
+        k1 = self.conv_k1(x1).view(B, -1, H * W)
+        v1 = self.conv_v1(x1).view(B, -1, H * W)
+        
+        attn21 = torch.bmm(q2, k1)
+        attn21 = F.softmax(attn21, dim=-1)
+        
+        out2 = torch.bmm(v1, attn21.permute(0, 2, 1)).view(B, C, H, W)
+        x2_new = self.gamma2 * out2 + x2
+        
+        # --- Final fusion ---
+        # Concatenate the two enhanced features
+        x_fused = torch.cat([x1_new, x2_new], dim=1)  # [B, 2C, H, W]
+        x_fused = self.output_conv(x_fused)           # [B, out_channels, H, W]
+        
+        return x_fused
+
+
+@MODELS.register_module()
+class BiCrossAttentionFusion(nn.Module):
+    """Bidirectional Cross-Modal Attention Fusion Module.
+    
+    This module applies bidirectional cross-attention between two modalities
+    (e.g., Optical + SAR) at multiple feature scales.
+    
+    Args:
+        in_channels (list[int]): List of input channel numbers from each scale.
+        out_channels (list[int]): List of output channel numbers for each scale.
+        norm_cfg (dict, optional): Config dict for normalization layer.
+            Defaults to dict(type='BN').
+        act_cfg (dict, optional): Config dict for activation layer.
+            Defaults to dict(type='ReLU').
+    """
+    
+    def __init__(
+        self,
+        in_channels: List[int],
+        out_channels: List[int],
+        norm_cfg: dict = dict(type='BN'),
+        act_cfg: dict = dict(type='ReLU', inplace=True),
+    ) -> None:
+        super().__init__()
+        assert len(in_channels) == len(out_channels)
+        
+        self.fusion_blocks = nn.ModuleList()
+        
+        for in_c, out_c in zip(in_channels, out_channels):
+            self.fusion_blocks.append(
+                SpatialCrossAttentionBlock(in_c, out_c, norm_cfg, act_cfg)
+            )
+
+    def forward(self, feats1: Tuple[Tensor], feats2: Tuple[Tensor]) -> Tuple[Tensor]:
+        """Forward function.
+        
+        Args:
+            feats1 (tuple[Tensor]): Multi-scale Optical features (List of Tensors)
+            feats2 (tuple[Tensor]): Multi-scale SAR features (List of Tensors)
+            
+        Returns:
+            tuple[Tensor]: Fused multi-scale features.
+        """
+        assert len(feats1) == len(feats2) == len(self.fusion_blocks)
+        
+        fused_feats = []
+        for feat1, feat2, block in zip(feats1, feats2, self.fusion_blocks):
+            fused_feat = block(feat1, feat2)
+            fused_feats.append(fused_feat)
+            
         return tuple(fused_feats)
 
 
@@ -150,10 +290,10 @@ class DualStreamDINO(DINO):
         if self.fusion_module_cfg is not None:
             self.fusion_module = MODELS.build(self.fusion_module_cfg)
         else:
-            # Default fusion module using FeatureFusionModule
+            # Default fusion module using SimpleChannelFusion
             # Get the output channels from neck config (in_channels)
             in_channels = neck['in_channels']  # e.g., [512, 1024, 2048]
-            self.fusion_module = FeatureFusionModule(
+            self.fusion_module = SimpleChannelFusion(
                 in_channels=in_channels,
                 out_channels=in_channels,
                 norm_cfg=dict(type='BN'),

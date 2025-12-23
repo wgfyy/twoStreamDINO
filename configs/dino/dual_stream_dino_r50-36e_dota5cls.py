@@ -53,6 +53,14 @@ model = dict(
         norm_eval=True,
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
+
+    fusion_module=dict(
+        type='BiCrossAttentionFusion',
+        in_channels=[512, 1024, 2048],
+        out_channels=[512, 1024, 2048],
+        norm_cfg=dict(type='BN'),
+        act_cfg=dict(type='ReLU', inplace=True)
+    ),
     
     # Neck
     neck=dict(
