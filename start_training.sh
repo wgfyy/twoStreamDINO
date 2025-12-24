@@ -26,6 +26,12 @@ echo "开始训练..."
 echo "=========================================="
 
 # python tools/train.py $CONFIG --work-dir $WORK_DIR
+# 以下为不同训练配置的命令示例
+# 双流DINO cat+conv融合 12轮训练
 # python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls
+# 双流DINO 36轮训练
 # python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls
-python tools/train.py configs/dino/dino-4scale_r50_8xb2-12e_dota5cls.py --work-dir work_dirs/dino-4scale_r50_8xb2-12e_dota5cls-optical
+# 单流DINO 可见光 12轮训练
+# python tools/train.py configs/dino/dino-4scale_r50_8xb2-12e_dota5cls.py --work-dir work_dirs/dino-4scale_r50_8xb2-12e_dota5cls-optical
+# 双流DINO 可见光+SAR 12轮训练 交叉注意力融合
+python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-crossattn

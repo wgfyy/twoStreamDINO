@@ -82,7 +82,16 @@ class SpatialCrossAttentionBlock(nn.Module):
         out_channels (int): Number of output channels.
         norm_cfg (dict): Config for normalization layer.
         act_cfg (dict): Config for activation layer.
-    改进方向：
+        downsample_ratio (int): Downsample ratio for reducing spatial resolution
+            before computing attention. Default: 4 (reduces memory by 16x).
+            Set to 1 to disable downsampling (high memory usage).
+    
+    Memory optimization:
+        - downsample_ratio=4: Reduces H×W to (H/4)×(W/4), saves 16x memory
+        - downsample_ratio=8: Reduces to (H/8)×(W/8), saves 64x memory
+        - For 256×256 feature map with ratio=4: 65536×65536 → 4096×4096
+
+        改进方向：
         将交叉注意力机制与FPN的思想结合，在不同尺度上进行双向交叉注意力融合.
         可能的实现途径：
         1.先交叉注意力，再FPN
@@ -90,11 +99,21 @@ class SpatialCrossAttentionBlock(nn.Module):
         3.先FPN，然后两个模态的多尺度特征之间进行交叉注意力融合
     """
     
-    def __init__(self, in_channels, out_channels, norm_cfg, act_cfg):
+    def __init__(self, in_channels, out_channels, norm_cfg, act_cfg, downsample_ratio=4):
         super().__init__()
+        
+        self.downsample_ratio = downsample_ratio
         
         # Reduce dimension to reduce computation (usually 1/2 or 1/8)
         inter_channels = in_channels // 2
+        
+        # Downsampling layer for reducing spatial resolution (saves memory)
+        if downsample_ratio > 1:
+            self.downsample = nn.AvgPool2d(kernel_size=downsample_ratio, stride=downsample_ratio)
+            self.upsample = nn.Upsample(scale_factor=downsample_ratio, mode='bilinear', align_corners=False)
+        else:
+            self.downsample = nn.Identity()
+            self.upsample = nn.Identity()
         
         # 1. Modality 1 (RGB) transformation layers
         self.conv_q1 = nn.Conv2d(in_channels, inter_channels, kernel_size=1)
@@ -129,33 +148,40 @@ class SpatialCrossAttentionBlock(nn.Module):
         """
         B, C, H, W = x1.size()
         
-        # --- Branch 1: SAR assists RGB (SAR as Key/Value, RGB as Query) ---
-        # Logic: RGB wants to see where SAR has strong responses
-        q1 = self.conv_q1(x1).view(B, -1, H * W).permute(0, 2, 1)  # B, N, C'
-        k2 = self.conv_k2(x2).view(B, -1, H * W)                   # B, C', N
-        v2 = self.conv_v2(x2).view(B, -1, H * W)                   # B, C, N
+        # Downsample to reduce spatial dimensions (saves memory)
+        x1_down = self.downsample(x1)  # [B, C, H/r, W/r]
+        x2_down = self.downsample(x2)  # [B, C, H/r, W/r]
         
-        # Attention Map: RGB Query finds SAR Key
-        attn12 = torch.bmm(q1, k2)  # B, N, N (spatial attention matrix)
+        _, _, H_down, W_down = x1_down.size()
+        N_down = H_down * W_down
+        
+        # --- Branch 1: SAR assists RGB (SAR as Key/Value, RGB as Query) ---
+        q1 = self.conv_q1(x1_down).view(B, -1, N_down).permute(0, 2, 1)  # B, N', C'
+        k2 = self.conv_k2(x2_down).view(B, -1, N_down)                   # B, C', N'
+        v2 = self.conv_v2(x2_down).view(B, -1, N_down)                   # B, C, N'
+        
+        # Attention Map: RGB Query finds SAR Key (now N' × N' instead of N × N)
+        attn12 = torch.bmm(q1, k2)  # B, N', N' (reduced spatial attention)
         attn12 = F.softmax(attn12, dim=-1)
         
         # Aggregate SAR's Value to RGB
-        out1 = torch.bmm(v2, attn12.permute(0, 2, 1)).view(B, C, H, W)
+        out1 = torch.bmm(v2, attn12.permute(0, 2, 1)).view(B, C, H_down, W_down)
+        out1 = self.upsample(out1)  # Upsample back to original size
         x1_new = self.gamma1 * out1 + x1  # Residual connection
         
         # --- Branch 2: RGB assists SAR (RGB as Key/Value, SAR as Query) ---
-        q2 = self.conv_q2(x2).view(B, -1, H * W).permute(0, 2, 1)
-        k1 = self.conv_k1(x1).view(B, -1, H * W)
-        v1 = self.conv_v1(x1).view(B, -1, H * W)
+        q2 = self.conv_q2(x2_down).view(B, -1, N_down).permute(0, 2, 1)
+        k1 = self.conv_k1(x1_down).view(B, -1, N_down)
+        v1 = self.conv_v1(x1_down).view(B, -1, N_down)
         
         attn21 = torch.bmm(q2, k1)
         attn21 = F.softmax(attn21, dim=-1)
         
-        out2 = torch.bmm(v1, attn21.permute(0, 2, 1)).view(B, C, H, W)
+        out2 = torch.bmm(v1, attn21.permute(0, 2, 1)).view(B, C, H_down, W_down)
+        out2 = self.upsample(out2)  # Upsample back to original size
         x2_new = self.gamma2 * out2 + x2
         
         # --- Final fusion ---
-        # Concatenate the two enhanced features
         x_fused = torch.cat([x1_new, x2_new], dim=1)  # [B, 2C, H, W]
         x_fused = self.output_conv(x_fused)           # [B, out_channels, H, W]
         
@@ -176,6 +202,12 @@ class BiCrossAttentionFusion(nn.Module):
             Defaults to dict(type='BN').
         act_cfg (dict, optional): Config dict for activation layer.
             Defaults to dict(type='ReLU').
+        downsample_ratio (int): Downsample ratio for spatial attention.
+            Default: 4. Use higher values (8, 16) to save more memory.
+            Example memory savings for 256×256 feature map:
+            - ratio=1: 65536×65536 attention matrix (full resolution, high memory)
+            - ratio=4: 4096×4096 attention matrix (16x less memory)
+            - ratio=8: 1024×1024 attention matrix (64x less memory)
     """
     
     def __init__(
@@ -184,6 +216,7 @@ class BiCrossAttentionFusion(nn.Module):
         out_channels: List[int],
         norm_cfg: dict = dict(type='BN'),
         act_cfg: dict = dict(type='ReLU', inplace=True),
+        downsample_ratio: int = 4,
     ) -> None:
         super().__init__()
         assert len(in_channels) == len(out_channels)
@@ -192,7 +225,7 @@ class BiCrossAttentionFusion(nn.Module):
         
         for in_c, out_c in zip(in_channels, out_channels):
             self.fusion_blocks.append(
-                SpatialCrossAttentionBlock(in_c, out_c, norm_cfg, act_cfg)
+                SpatialCrossAttentionBlock(in_c, out_c, norm_cfg, act_cfg, downsample_ratio)
             )
 
     def forward(self, feats1: Tuple[Tensor], feats2: Tuple[Tensor]) -> Tuple[Tensor]:
