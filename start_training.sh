@@ -26,4 +26,6 @@ echo "开始训练..."
 echo "=========================================="
 
 # python tools/train.py $CONFIG --work-dir $WORK_DIR
-python tools/train.py configs/dino/dual_stream_dino_r50_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50_dota5cls
+# python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls
+# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls
+python tools/train.py configs/dino/dino-4scale_r50_8xb2-12e_dota5cls.py --work-dir work_dirs/dino-4scale_r50_8xb2-12e_dota5cls-optical

@@ -407,3 +407,121 @@ class DualModalRandomChoiceResize(BaseTransform):
             keep_ratio=self.keep_ratio,
         )
         return resize_transform(results)
+
+
+@TRANSFORMS.register_module()
+class AdaptiveBboxScale(BaseTransform):
+    """Automatically scale bboxes when image size doesn't match annotation size.
+    
+    This transform is useful when using low-resolution images (e.g., 256x256 SAR)
+    with annotations created for high-resolution images (e.g., 1024x1024 visible).
+    
+    It should be placed AFTER LoadImageFromFile and LoadAnnotations in the pipeline.
+    
+    Args:
+        target_size (tuple, optional): Target image size (width, height).
+            If specified, will resize image to this size before scaling bboxes.
+            If None, will only scale bboxes based on current image size.
+            Defaults to None.
+        annotation_size (tuple, optional): Original annotation size (width, height).
+            If specified, will use this as reference. If None, will try to infer
+            from COCO annotation file's image info. Defaults to None.
+    
+    Example:
+        >>> # Case 1: Auto-detect and scale (no resize)
+        >>> train_pipeline = [
+        >>>     dict(type='LoadImageFromFile'),
+        >>>     dict(type='LoadAnnotations', with_bbox=True),
+        >>>     dict(type='AdaptiveBboxScale'),  # Auto scale bbox
+        >>>     dict(type='RandomFlip'),
+        >>>     ...
+        >>> ]
+        >>> 
+        >>> # Case 2: Resize image to target size, then scale bbox
+        >>> train_pipeline = [
+        >>>     dict(type='LoadImageFromFile'),
+        >>>     dict(type='LoadAnnotations', with_bbox=True),
+        >>>     dict(type='AdaptiveBboxScale', target_size=(1024, 1024)),
+        >>>     dict(type='RandomFlip'),
+        >>>     ...
+        >>> ]
+    """
+    
+    def __init__(
+        self,
+        target_size: Optional[Tuple[int, int]] = None,
+        annotation_size: Optional[Tuple[int, int]] = None,
+    ) -> None:
+        self.target_size = target_size
+        self.annotation_size = annotation_size
+    
+    def transform(self, results: dict) -> dict:
+        """Transform function.
+        
+        Args:
+            results (dict): Result dict with 'img', 'gt_bboxes', etc.
+        
+        Returns:
+            dict: Result dict with scaled bboxes and optionally resized image.
+        """
+        img = results['img']
+        current_h, current_w = img.shape[:2]
+        
+        # Get annotation size from results metadata or use specified value
+        if self.annotation_size is not None:
+            ann_w, ann_h = self.annotation_size
+        elif 'height' in results and 'width' in results:
+            # From COCO dataset's image info
+            ann_h = results['height']
+            ann_w = results['width']
+        else:
+            # Cannot determine annotation size, skip scaling
+            if self.target_size is not None:
+                # But still resize image if target_size is specified
+                img = mmcv.imresize(img, self.target_size)
+                results['img'] = img
+                results['img_shape'] = img.shape[:2]
+            return results
+        
+        # Determine target size
+        if self.target_size is not None:
+            target_w, target_h = self.target_size
+        else:
+            target_w, target_h = current_w, current_h
+        
+        # Calculate bbox scaling factors
+        scale_x = target_w / ann_w
+        scale_y = target_h / ann_h
+        
+        # Scale bboxes if scaling is needed
+        if scale_x != 1.0 or scale_y != 1.0:
+            if 'gt_bboxes' in results:
+                gt_bboxes = results['gt_bboxes']
+                
+                # Handle MMDetection 3.x BaseBoxes type
+                if hasattr(gt_bboxes, 'tensor'):
+                    bboxes = gt_bboxes.tensor.clone()
+                    # bbox format: [x1, y1, x2, y2]
+                    bboxes[:, [0, 2]] *= scale_x
+                    bboxes[:, [1, 3]] *= scale_y
+                    gt_bboxes.tensor = bboxes
+                else:
+                    # Fallback for numpy array
+                    bboxes = gt_bboxes.copy()
+                    bboxes[:, [0, 2]] *= scale_x
+                    bboxes[:, [1, 3]] *= scale_y
+                    results['gt_bboxes'] = bboxes
+        
+        # Resize image to target size if specified
+        if self.target_size is not None and (current_w != target_w or current_h != target_h):
+            img = mmcv.imresize(img, self.target_size)
+            results['img'] = img
+            results['img_shape'] = img.shape[:2]
+        
+        return results
+    
+    def __repr__(self) -> str:
+        repr_str = (f'{self.__class__.__name__}('
+                    f'target_size={self.target_size}, '
+                    f'annotation_size={self.annotation_size})')
+        return repr_str

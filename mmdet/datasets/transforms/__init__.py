@@ -16,7 +16,8 @@ from .loading import (FilterAnnotations, InferencerLoader, LoadAnnotations,
 from .dual_modal_transforms import (LoadDualModalImagesFromFile,
                                     DualModalRandomFlip, DualModalResize,
                                     PackDualModalDetInputs,
-                                    DualModalRandomChoiceResize)
+                                    DualModalRandomChoiceResize,
+                                    AdaptiveBboxScale)
 from .transforms import (Albu, CachedMixUp, CachedMosaic, CopyPaste, CutOut,
                          Expand, FixScaleResize, FixShapeResize,
                          MinIoURandomCrop, MixUp, Mosaic, Pad,
@@ -43,5 +44,5 @@ __all__ = [
     'LoadTrackAnnotations', 'BaseFrameSample', 'UniformRefFrameSample',
     'PackTrackInputs', 'PackReIDInputs', 'FixScaleResize', 'ResizeShortestEdge',
     'LoadDualModalImagesFromFile', 'DualModalRandomFlip', 'DualModalResize',
-    'PackDualModalDetInputs', 'DualModalRandomChoiceResize'
+    'PackDualModalDetInputs', 'DualModalRandomChoiceResize', 'AdaptiveBboxScale'
 ]
