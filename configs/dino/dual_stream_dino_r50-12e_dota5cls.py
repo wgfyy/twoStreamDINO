@@ -265,6 +265,9 @@ optim_wrapper = dict(
         lr=0.0001,
         weight_decay=0.0001),
     clip_grad=dict(max_norm=0.1, norm_type=2),
+    # 梯度累积: 每4个batch累积一次梯度更新
+    # 有效batch_size = 2 × 4 = 8
+    accumulative_counts=4,
     paramwise_cfg=dict(
         custom_keys={
             'backbone': dict(lr_mult=0.1),
