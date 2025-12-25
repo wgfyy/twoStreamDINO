@@ -31,41 +31,44 @@ model = dict(
         pad_size_divisor=1),
     
     # 第一个backbone (可见光)
+    # 使用 GroupNorm 替代 BN，适配小 batch 训练
     backbone=dict(
         type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(1, 2, 3),
         frozen_stages=1,
-        norm_cfg=dict(type='BN', requires_grad=False),
-        norm_eval=True,
+        norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+        norm_eval=False,  # GN 不需要 norm_eval
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
     
     # 第二个backbone (SAR)
+    # 使用 GroupNorm 替代 BN，适配小 batch 训练
     backbone2=dict(
         type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(1, 2, 3),
         frozen_stages=1,
-        norm_cfg=dict(type='BN', requires_grad=False),
-        norm_eval=True,
+        norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+        norm_eval=False,  # GN 不需要 norm_eval
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
 
-    # 融合模块配置 - 三种可选方案:
+    # 融合模块配置 - 四种可选方案:
     # 1. SimpleChannelFusion: 简单通道拼接+卷积
     # 2. BiCrossAttentionFusion: 空间交叉注意力（内存占用较高）
     # 3. ChannelAttentionFusion: 通道交叉注意力（内存高效）
     # 4. HybridAttentionFusion: 混合注意力（同时使用空间+通道注意力）
+    # 注意: 使用 GroupNorm 替代 BatchNorm，解决小batch(batch=2)下统计量不准确问题
     
     # 方案1: 简单融合（最快，内存最小）
     # fusion_module=dict(
     #     type='SimpleChannelFusion',
     #     in_channels=[512, 1024, 2048],
     #     out_channels=[512, 1024, 2048],
-    #     norm_cfg=dict(type='BN'),
+    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
     #     act_cfg=dict(type='ReLU', inplace=True)
     # ),
     
@@ -75,7 +78,7 @@ model = dict(
     #     in_channels=[512, 1024, 2048],
     #     out_channels=[512, 1024, 2048],
     #     downsample_ratio=4,  # 降低内存占用
-    #     norm_cfg=dict(type='BN'),
+    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
     #     act_cfg=dict(type='ReLU', inplace=True)
     # ),
     
@@ -85,11 +88,12 @@ model = dict(
     #     in_channels=[512, 1024, 2048],
     #     out_channels=[512, 1024, 2048],
     #     reduction=4,  # 通道压缩比
-    #     norm_cfg=dict(type='BN'),
+    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
     #     act_cfg=dict(type='ReLU', inplace=True)
     # ),
     
     # 方案4: 混合注意力（同时使用空间+通道，效果最好但计算量较大）
+    # 使用 GroupNorm: 不依赖batch统计，小batch下更稳定
     fusion_module=dict(
         type='HybridAttentionFusion',
         in_channels=[512, 1024, 2048],
@@ -97,7 +101,7 @@ model = dict(
         downsample_ratio=4,      # 空间注意力的下采样比例
         channel_reduction=4,      # 通道注意力的压缩比例
         fusion_weight=0.5,        # 空间和通道注意力的权重 (0.5=均衡)
-        norm_cfg=dict(type='BN'),
+        norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
         act_cfg=dict(type='ReLU', inplace=True)
     ),
     
