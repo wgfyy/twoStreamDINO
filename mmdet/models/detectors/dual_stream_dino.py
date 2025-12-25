@@ -70,6 +70,128 @@ class SimpleChannelFusion(nn.Module):
         return tuple(fused_feats)
 
 
+@MODELS.register_module()
+class AdaptiveGatedFusion(nn.Module):
+    """Adaptive Gated Fusion Module.
+    
+    Uses a spatial gate to adaptively weight features from two streams (Pixel-level).
+    Best for: Fusing features after Spatial Attention.
+    
+    Args:
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
+        norm_cfg (dict): Config for normalization layer.
+    """
+    def __init__(self, in_channels, out_channels, norm_cfg=dict(type='BN')):
+        super().__init__()
+        
+        # Gate generation network: input is concatenation of two modalities, output is 1-channel weight map
+        self.gate_conv = nn.Sequential(
+            nn.Conv2d(in_channels * 2, in_channels // 2, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // 2, 1, kernel_size=3, padding=1, bias=True),
+            nn.Sigmoid()
+        )
+        
+        # Final channel adjustment
+        self.out_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels) if norm_cfg['type'] == 'BN' else nn.GroupNorm(32, out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x1, x2):
+        """Forward function.
+        
+        Args:
+            x1 (Tensor): Modality 1 (e.g., RGB enhanced) [B, C, H, W]
+            x2 (Tensor): Modality 2 (e.g., SAR enhanced) [B, C, H, W]
+            
+        Returns:
+            Tensor: Fused feature [B, out_channels, H, W]
+        """
+        # Concatenate features to generate Gate
+        cat_feat = torch.cat([x1, x2], dim=1)
+        
+        # Generate gate mask [B, 1, H, W]
+        gate = self.gate_conv(cat_feat)
+        
+        # Weighted fusion (Soft selection)
+        fused = x1 * gate + x2 * (1 - gate)
+        
+        # Adjust output
+        out = self.out_conv(fused)
+        return out
+
+
+@MODELS.register_module()
+class SelectiveFeatureFusion(nn.Module):
+    """Selective Feature Fusion (Channel-wise soft selection).
+    
+    Learns dynamic channel weights to combine two streams (Global-level).
+    Best for: Fusing features after Channel Attention.
+    
+    Args:
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
+        norm_cfg (dict): Config for normalization layer.
+    """
+    def __init__(self, in_channels, out_channels, norm_cfg=dict(type='BN')):
+        super().__init__()
+        
+        reduction = 16
+        mid_channels = max(in_channels // reduction, 32)
+        
+        # Global pooling
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        
+        # MLP to generate channel weights
+        self.fc = nn.Sequential(
+            nn.Linear(in_channels, mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Linear(mid_channels, in_channels * 2)  # Output weights for two modalities
+        )
+        
+        # Post-fusion processing
+        self.out_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels) if norm_cfg['type'] == 'BN' else nn.GroupNorm(32, out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x1, x2):
+        """Forward function.
+        
+        Args:
+            x1 (Tensor): Modality 1 feature [B, C, H, W]
+            x2 (Tensor): Modality 2 feature [B, C, H, W]
+            
+        Returns:
+            Tensor: Fused feature [B, out_channels, H, W]
+        """
+        B, C, H, W = x1.size()
+        
+        # 1. Initial fusion (Add) to get global context
+        feat_sum = x1 + x2
+        
+        # 2. Extract global descriptor [B, C]
+        feat_vec = self.avg_pool(feat_sum).view(B, C)
+        
+        # 3. Generate weights [B, 2C] -> [B, 2, C]
+        weights = self.fc(feat_vec).view(B, 2, C)
+        weights = F.softmax(weights, dim=1)  # Softmax ensures weights sum to 1
+        
+        w1 = weights[:, 0, :].view(B, C, 1, 1)
+        w2 = weights[:, 1, :].view(B, C, 1, 1)
+        
+        # 4. Dynamic weighting
+        fused = x1 * w1 + x2 * w2
+        
+        # 5. Output transformation
+        out = self.out_conv(fused)
+        return out
+
+
 class SpatialCrossAttentionBlock(nn.Module):
     """Spatial Cross-Attention Block for bidirectional feature interaction.
     
@@ -125,16 +247,12 @@ class SpatialCrossAttentionBlock(nn.Module):
         self.conv_k2 = nn.Conv2d(in_channels, inter_channels, kernel_size=1)
         self.conv_v2 = nn.Conv2d(in_channels, in_channels, kernel_size=1)
         
-        # 3. Final fusion layer
-        self.output_conv = nn.Sequential(
-            nn.Conv2d(in_channels * 2, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels) if norm_cfg['type'] == 'BN' else nn.GroupNorm(32, out_channels),
-            nn.ReLU(inplace=True) if act_cfg['type'] == 'ReLU' else nn.Identity()
-        )
-        
         # Learnable parameters Gamma to control attention strength
         self.gamma1 = nn.Parameter(torch.zeros(1))
         self.gamma2 = nn.Parameter(torch.zeros(1))
+        
+        # 3. Fusion module - Use AdaptiveGatedFusion for spatial attention
+        self.fusion = AdaptiveGatedFusion(in_channels, out_channels, norm_cfg)
 
     def forward(self, x1, x2):
         """Forward function.
@@ -181,9 +299,8 @@ class SpatialCrossAttentionBlock(nn.Module):
         out2 = F.interpolate(out2, size=(H, W), mode='bilinear', align_corners=False)  # Upsample to match x2
         x2_new = self.gamma2 * out2 + x2
         
-        # --- Final fusion ---
-        x_fused = torch.cat([x1_new, x2_new], dim=1)  # [B, 2C, H, W]
-        x_fused = self.output_conv(x_fused)           # [B, out_channels, H, W]
+        # --- Final fusion using AdaptiveGatedFusion ---
+        x_fused = self.fusion(x1_new, x2_new)
         
         return x_fused
 
@@ -305,16 +422,12 @@ class ChannelCrossAttentionBlock(nn.Module):
             nn.ReLU(inplace=True)
         )
         
-        # Final fusion
-        self.output_conv = nn.Sequential(
-            nn.Conv2d(in_channels * 2, out_channels, kernel_size=1, bias=False),
-            nn.BatchNorm2d(out_channels) if norm_cfg['type'] == 'BN' else nn.GroupNorm(32, out_channels),
-            nn.ReLU(inplace=True) if act_cfg['type'] == 'ReLU' else nn.Identity()
-        )
-        
         # Learnable channel attention weights
         self.gamma1 = nn.Parameter(torch.zeros(1))
         self.gamma2 = nn.Parameter(torch.zeros(1))
+        
+        # Fusion module - Use SelectiveFeatureFusion for channel attention
+        self.fusion = SelectiveFeatureFusion(in_channels, out_channels, norm_cfg)
     
     def forward(self, x1, x2):
         """Forward function.
@@ -366,9 +479,8 @@ class ChannelCrossAttentionBlock(nn.Module):
         out2 = out2.view(B, C, 1, 1).expand_as(x2)
         x2_new = self.gamma2 * out2 + x2
         
-        # Final fusion
-        x_fused = torch.cat([x1_new, x2_new], dim=1)
-        x_fused = self.output_conv(x_fused)
+        # Final fusion using SelectiveFeatureFusion
+        x_fused = self.fusion(x1_new, x2_new)
         
         return x_fused
 
