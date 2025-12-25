@@ -100,6 +100,10 @@ class AdaptiveGatedFusion(nn.Module):
             nn.ReLU(inplace=True)
         )
 
+    def init_weights(self):
+        nn.init.constant_(self.gate_conv[-2].weight, 0)
+        nn.init.constant_(self.gate_conv[-2].bias, 0)
+
     def forward(self, x1, x2):
         """Forward function.
         
@@ -121,7 +125,7 @@ class AdaptiveGatedFusion(nn.Module):
         
         # Adjust output
         out = self.out_conv(fused)
-        return out
+        return out + x1 + x2  # Residual connection
 
 
 @MODELS.register_module()
@@ -151,6 +155,7 @@ class SelectiveFeatureFusion(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(mid_channels, in_channels * 2)  # Output weights for two modalities
         )
+
         
         # Post-fusion processing
         self.out_conv = nn.Sequential(
@@ -158,6 +163,10 @@ class SelectiveFeatureFusion(nn.Module):
             nn.BatchNorm2d(out_channels) if norm_cfg['type'] == 'BN' else nn.GroupNorm(32, out_channels),
             nn.ReLU(inplace=True)
         )
+
+    def init_weights(self):
+        nn.init.constant_(self.fc[-1].weight, 0)
+        nn.init.constant_(self.fc[-1].bias, 0)
 
     def forward(self, x1, x2):
         """Forward function.
