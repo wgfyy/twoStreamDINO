@@ -34,4 +34,4 @@ echo "=========================================="
 # 单流DINO 可见光 12轮训练
 # python tools/train.py configs/dino/dino-4scale_r50_8xb2-12e_dota5cls.py --work-dir work_dirs/dino-4scale_r50_8xb2-12e_dota5cls-optical
 # 双流DINO 可见光+SAR 12轮训练 交叉注意力融合
-python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-crossattn
+python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-dualcrossattn

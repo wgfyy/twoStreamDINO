@@ -248,6 +248,296 @@ class BiCrossAttentionFusion(nn.Module):
         return tuple(fused_feats)
 
 
+class ChannelCrossAttentionBlock(nn.Module):
+    """Channel Cross-Attention Block for bidirectional feature interaction.
+    
+    Unlike spatial attention, this computes attention across channels instead of
+    spatial locations, which is much more memory-efficient.
+    
+    Args:
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
+        norm_cfg (dict): Config for normalization layer.
+        act_cfg (dict): Config for activation layer.
+        reduction (int): Channel reduction ratio for intermediate layers.
+            Default: 4 (reduces channels by 4x).
+    
+    Memory comparison:
+        Spatial attention: O(H×W × H×W) = O((HW)²)
+        Channel attention: O(C × C) = O(C²)
+        For typical feature: C=512, H=W=64 → 512² vs 4096² (64x less memory!)
+    """
+    
+    def __init__(self, in_channels, out_channels, norm_cfg, act_cfg, reduction=4):
+        super().__init__()
+        
+        inter_channels = max(in_channels // reduction, 32)
+        
+        # Global pooling to aggregate spatial information
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.gmp = nn.AdaptiveMaxPool2d(1)
+        
+        # Modality 1 (Optical) channel attention
+        self.fc1_q = nn.Sequential(
+            nn.Linear(in_channels, inter_channels),
+            nn.ReLU(inplace=True)
+        )
+        self.fc1_k = nn.Sequential(
+            nn.Linear(in_channels, inter_channels),
+            nn.ReLU(inplace=True)
+        )
+        self.fc1_v = nn.Sequential(
+            nn.Linear(in_channels, in_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Modality 2 (SAR) channel attention
+        self.fc2_q = nn.Sequential(
+            nn.Linear(in_channels, inter_channels),
+            nn.ReLU(inplace=True)
+        )
+        self.fc2_k = nn.Sequential(
+            nn.Linear(in_channels, inter_channels),
+            nn.ReLU(inplace=True)
+        )
+        self.fc2_v = nn.Sequential(
+            nn.Linear(in_channels, in_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Final fusion
+        self.output_conv = nn.Sequential(
+            nn.Conv2d(in_channels * 2, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_channels) if norm_cfg['type'] == 'BN' else nn.GroupNorm(32, out_channels),
+            nn.ReLU(inplace=True) if act_cfg['type'] == 'ReLU' else nn.Identity()
+        )
+        
+        # Learnable channel attention weights
+        self.gamma1 = nn.Parameter(torch.zeros(1))
+        self.gamma2 = nn.Parameter(torch.zeros(1))
+    
+    def forward(self, x1, x2):
+        """Forward function.
+        
+        Args:
+            x1 (Tensor): Optical feature [B, C, H, W]
+            x2 (Tensor): SAR feature [B, C, H, W]
+            
+        Returns:
+            Tensor: Fused feature [B, out_channels, H, W]
+        """
+        B, C, H, W = x1.size()
+        
+        # Aggregate spatial information using both avg and max pooling
+        x1_gap = self.gap(x1).view(B, C)  # [B, C]
+        x1_gmp = self.gmp(x1).view(B, C)
+        x1_pool = (x1_gap + x1_gmp) / 2
+        
+        x2_gap = self.gap(x2).view(B, C)
+        x2_gmp = self.gmp(x2).view(B, C)
+        x2_pool = (x2_gap + x2_gmp) / 2
+        
+        # --- Branch 1: SAR guides Optical channel attention ---
+        q1 = self.fc1_q(x1_pool)  # [B, C']
+        k2 = self.fc2_k(x2_pool)  # [B, C']
+        v2 = self.fc2_v(x2_pool)  # [B, C]
+        
+        # Channel attention: [B, C'] x [B, C']
+        attn12 = torch.matmul(q1.unsqueeze(2), k2.unsqueeze(1))  # [B, C', C']
+        attn12 = F.softmax(attn12 / (q1.size(1) ** 0.5), dim=-1)  # Scaled dot-product
+        
+        # Apply channel attention to value
+        out1 = torch.matmul(attn12, v2.unsqueeze(2)).squeeze(2)  # [B, C]
+        out1 = out1.view(B, C, 1, 1).expand_as(x1)  # Broadcast to spatial dims
+        x1_new = self.gamma1 * out1 + x1
+        
+        # --- Branch 2: Optical guides SAR channel attention ---
+        q2 = self.fc2_q(x2_pool)
+        k1 = self.fc1_k(x1_pool)
+        v1 = self.fc1_v(x1_pool)
+        
+        attn21 = torch.matmul(q2.unsqueeze(2), k1.unsqueeze(1))
+        attn21 = F.softmax(attn21 / (q2.size(1) ** 0.5), dim=-1)
+        
+        out2 = torch.matmul(attn21, v1.unsqueeze(2)).squeeze(2)
+        out2 = out2.view(B, C, 1, 1).expand_as(x2)
+        x2_new = self.gamma2 * out2 + x2
+        
+        # Final fusion
+        x_fused = torch.cat([x1_new, x2_new], dim=1)
+        x_fused = self.output_conv(x_fused)
+        
+        return x_fused
+
+
+@MODELS.register_module()
+class ChannelAttentionFusion(nn.Module):
+    """Channel Attention Fusion Module (Memory-Efficient).
+    
+    Uses channel-wise attention instead of spatial attention for much lower
+    memory consumption. Suitable for high-resolution feature maps.
+    
+    Args:
+        in_channels (list[int]): List of input channel numbers from each scale.
+        out_channels (list[int]): List of output channel numbers for each scale.
+        norm_cfg (dict, optional): Config dict for normalization layer.
+        act_cfg (dict, optional): Config dict for activation layer.
+        reduction (int): Channel reduction ratio. Default: 4.
+    """
+    
+    def __init__(
+        self,
+        in_channels: List[int],
+        out_channels: List[int],
+        norm_cfg: dict = dict(type='BN'),
+        act_cfg: dict = dict(type='ReLU', inplace=True),
+        reduction: int = 4,
+    ) -> None:
+        super().__init__()
+        assert len(in_channels) == len(out_channels)
+        
+        self.fusion_blocks = nn.ModuleList()
+        
+        for in_c, out_c in zip(in_channels, out_channels):
+            self.fusion_blocks.append(
+                ChannelCrossAttentionBlock(in_c, out_c, norm_cfg, act_cfg, reduction)
+            )
+
+    def forward(self, feats1: Tuple[Tensor], feats2: Tuple[Tensor]) -> Tuple[Tensor]:
+        """Forward function.
+        
+        Args:
+            feats1 (tuple[Tensor]): Multi-scale Optical features
+            feats2 (tuple[Tensor]): Multi-scale SAR features
+            
+        Returns:
+            tuple[Tensor]: Fused multi-scale features.
+        """
+        assert len(feats1) == len(feats2) == len(self.fusion_blocks)
+        
+        fused_feats = []
+        for feat1, feat2, block in zip(feats1, feats2, self.fusion_blocks):
+            fused_feat = block(feat1, feat2)
+            fused_feats.append(fused_feat)
+            
+        return tuple(fused_feats)
+
+
+
+@MODELS.register_module()
+class HybridAttentionFusion(nn.Module):
+    """Hybrid Attention Fusion Module - combines spatial and channel attention.
+    
+    This module applies both spatial cross-attention and channel cross-attention,
+    allowing the model to capture both spatial relationships and channel dependencies.
+    
+    Args:
+        in_channels (list[int]): List of input channel numbers from each scale.
+        out_channels (list[int]): List of output channel numbers for each scale.
+        norm_cfg (dict, optional): Config dict for normalization layer.
+        act_cfg (dict, optional): Config dict for activation layer.
+        downsample_ratio (int): Spatial downsampling ratio for spatial attention.
+            Default: 4.
+        channel_reduction (int): Channel reduction ratio for channel attention.
+            Default: 4.
+        fusion_weight (float): Weight for balancing spatial and channel attention.
+            fusion = fusion_weight * spatial + (1 - fusion_weight) * channel.
+            Default: 0.5 (equal weight).
+    
+    Example:
+        >>> # Equal weight for spatial and channel attention
+        >>> fusion_module = dict(
+        >>>     type='HybridAttentionFusion',
+        >>>     in_channels=[512, 1024, 2048],
+        >>>     out_channels=[512, 1024, 2048],
+        >>>     downsample_ratio=4,
+        >>>     channel_reduction=4,
+        >>>     fusion_weight=0.5
+        >>> )
+    """
+    
+    def __init__(
+        self,
+        in_channels: List[int],
+        out_channels: List[int],
+        norm_cfg: dict = dict(type='BN'),
+        act_cfg: dict = dict(type='ReLU', inplace=True),
+        downsample_ratio: int = 4,
+        channel_reduction: int = 4,
+        fusion_weight: float = 0.5,
+    ) -> None:
+        super().__init__()
+        assert len(in_channels) == len(out_channels)
+        assert 0.0 <= fusion_weight <= 1.0, "fusion_weight must be in [0, 1]"
+        
+        self.fusion_weight = fusion_weight
+        
+        # Spatial attention branch
+        self.spatial_blocks = nn.ModuleList()
+        for in_c, out_c in zip(in_channels, out_channels):
+            self.spatial_blocks.append(
+                SpatialCrossAttentionBlock(in_c, out_c, norm_cfg, act_cfg, downsample_ratio)
+            )
+        
+        # Channel attention branch
+        self.channel_blocks = nn.ModuleList()
+        for in_c, out_c in zip(in_channels, out_channels):
+            self.channel_blocks.append(
+                ChannelCrossAttentionBlock(in_c, out_c, norm_cfg, act_cfg, channel_reduction)
+            )
+        
+        # Final fusion layer for each scale
+        self.fusion_convs = nn.ModuleList()
+        for out_c in out_channels:
+            self.fusion_convs.append(
+                nn.Sequential(
+                    nn.Conv2d(out_c * 2, out_c, kernel_size=1, bias=False),
+                    nn.BatchNorm2d(out_c) if norm_cfg['type'] == 'BN' else nn.GroupNorm(32, out_c),
+                    nn.ReLU(inplace=True) if act_cfg['type'] == 'ReLU' else nn.Identity()
+                )
+            )
+
+    def forward(self, feats1: Tuple[Tensor], feats2: Tuple[Tensor]) -> Tuple[Tensor]:
+        """Forward function.
+        
+        Args:
+            feats1 (tuple[Tensor]): Multi-scale Optical features
+            feats2 (tuple[Tensor]): Multi-scale SAR features
+            
+        Returns:
+            tuple[Tensor]: Fused multi-scale features.
+        """
+        assert len(feats1) == len(feats2) == len(self.spatial_blocks)
+        
+        fused_feats = []
+        for feat1, feat2, spatial_block, channel_block, fusion_conv in zip(
+            feats1, feats2, self.spatial_blocks, self.channel_blocks, self.fusion_convs
+        ):
+            # Apply spatial attention
+            spatial_feat = spatial_block(feat1, feat2)
+            
+            # Apply channel attention
+            channel_feat = channel_block(feat1, feat2)
+            
+            # Weighted fusion of spatial and channel attention
+            if self.fusion_weight == 0.5:
+                # Equal weight - simple average
+                combined = torch.cat([spatial_feat, channel_feat], dim=1)
+                fused_feat = fusion_conv(combined)
+            else:
+                # Weighted combination
+                combined = torch.cat([
+                    spatial_feat * self.fusion_weight,
+                    channel_feat * (1 - self.fusion_weight)
+                ], dim=1)
+                fused_feat = fusion_conv(combined)
+            
+            fused_feats.append(fused_feat)
+            
+        return tuple(fused_feats)
+
+
+
 @MODELS.register_module()
 class DualStreamDINO(DINO):
     """Dual-Stream DINO detector for multi-modal detection.

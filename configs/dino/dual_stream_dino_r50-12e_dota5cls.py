@@ -54,11 +54,49 @@ model = dict(
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
 
+    # 融合模块配置 - 三种可选方案:
+    # 1. SimpleChannelFusion: 简单通道拼接+卷积
+    # 2. BiCrossAttentionFusion: 空间交叉注意力（内存占用较高）
+    # 3. ChannelAttentionFusion: 通道交叉注意力（内存高效）
+    # 4. HybridAttentionFusion: 混合注意力（同时使用空间+通道注意力）
+    
+    # 方案1: 简单融合（最快，内存最小）
+    # fusion_module=dict(
+    #     type='SimpleChannelFusion',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=[512, 1024, 2048],
+    #     norm_cfg=dict(type='BN'),
+    #     act_cfg=dict(type='ReLU', inplace=True)
+    # ),
+    
+    # 方案2: 空间注意力（细粒度空间交互）
+    # fusion_module=dict(
+    #     type='BiCrossAttentionFusion',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=[512, 1024, 2048],
+    #     downsample_ratio=4,  # 降低内存占用
+    #     norm_cfg=dict(type='BN'),
+    #     act_cfg=dict(type='ReLU', inplace=True)
+    # ),
+    
+    # 方案3: 通道注意力（内存高效）
+    # fusion_module=dict(
+    #     type='ChannelAttentionFusion',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=[512, 1024, 2048],
+    #     reduction=4,  # 通道压缩比
+    #     norm_cfg=dict(type='BN'),
+    #     act_cfg=dict(type='ReLU', inplace=True)
+    # ),
+    
+    # 方案4: 混合注意力（同时使用空间+通道，效果最好但计算量较大）
     fusion_module=dict(
-        type='BiCrossAttentionFusion',
+        type='HybridAttentionFusion',
         in_channels=[512, 1024, 2048],
         out_channels=[512, 1024, 2048],
-        downsample_ratio=4,
+        downsample_ratio=4,      # 空间注意力的下采样比例
+        channel_reduction=4,      # 通道注意力的压缩比例
+        fusion_weight=0.5,        # 空间和通道注意力的权重 (0.5=均衡)
         norm_cfg=dict(type='BN'),
         act_cfg=dict(type='ReLU', inplace=True)
     ),
