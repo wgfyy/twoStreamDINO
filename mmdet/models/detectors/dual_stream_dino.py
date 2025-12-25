@@ -166,7 +166,7 @@ class SpatialCrossAttentionBlock(nn.Module):
         
         # Aggregate SAR's Value to RGB
         out1 = torch.bmm(v2, attn12.permute(0, 2, 1)).view(B, C, H_down, W_down)
-        out1 = self.upsample(out1)  # Upsample back to original size
+        out1 = F.interpolate(out1, size=(H, W), mode='bilinear', align_corners=False)  # Upsample to match x1
         x1_new = self.gamma1 * out1 + x1  # Residual connection
         
         # --- Branch 2: RGB assists SAR (RGB as Key/Value, SAR as Query) ---
@@ -178,7 +178,7 @@ class SpatialCrossAttentionBlock(nn.Module):
         attn21 = F.softmax(attn21, dim=-1)
         
         out2 = torch.bmm(v1, attn21.permute(0, 2, 1)).view(B, C, H_down, W_down)
-        out2 = self.upsample(out2)  # Upsample back to original size
+        out2 = F.interpolate(out2, size=(H, W), mode='bilinear', align_corners=False)  # Upsample to match x2
         x2_new = self.gamma2 * out2 + x2
         
         # --- Final fusion ---
@@ -342,24 +342,27 @@ class ChannelCrossAttentionBlock(nn.Module):
         k2 = self.fc2_k(x2_pool)  # [B, C']
         v2 = self.fc2_v(x2_pool)  # [B, C]
         
-        # Channel attention: [B, C'] x [B, C']
-        attn12 = torch.matmul(q1.unsqueeze(2), k2.unsqueeze(1))  # [B, C', C']
-        attn12 = F.softmax(attn12 / (q1.size(1) ** 0.5), dim=-1)  # Scaled dot-product
+        # Channel attention: compute similarity between q1 and k2
+        # [B, C'] x [B, C'] -> [B, 1] (scalar attention score)
+        attn12 = torch.sum(q1 * k2, dim=1, keepdim=True)  # [B, 1]
+        attn12 = torch.sigmoid(attn12 / (q1.size(1) ** 0.5))  # Scaled activation
         
-        # Apply channel attention to value
-        out1 = torch.matmul(attn12, v2.unsqueeze(2)).squeeze(2)  # [B, C]
+        # Apply channel attention to value (element-wise)
+        out1 = attn12 * v2  # [B, C]
         out1 = out1.view(B, C, 1, 1).expand_as(x1)  # Broadcast to spatial dims
         x1_new = self.gamma1 * out1 + x1
         
         # --- Branch 2: Optical guides SAR channel attention ---
-        q2 = self.fc2_q(x2_pool)
-        k1 = self.fc1_k(x1_pool)
-        v1 = self.fc1_v(x1_pool)
+        q2 = self.fc2_q(x2_pool)  # [B, C']
+        k1 = self.fc1_k(x1_pool)  # [B, C']
+        v1 = self.fc1_v(x1_pool)  # [B, C]
         
-        attn21 = torch.matmul(q2.unsqueeze(2), k1.unsqueeze(1))
-        attn21 = F.softmax(attn21 / (q2.size(1) ** 0.5), dim=-1)
+        # Channel attention
+        attn21 = torch.sum(q2 * k1, dim=1, keepdim=True)  # [B, 1]
+        attn21 = torch.sigmoid(attn21 / (q2.size(1) ** 0.5))  # Scaled activation
         
-        out2 = torch.matmul(attn21, v1.unsqueeze(2)).squeeze(2)
+        # Apply attention
+        out2 = attn21 * v1  # [B, C]
         out2 = out2.view(B, C, 1, 1).expand_as(x2)
         x2_new = self.gamma2 * out2 + x2
         
