@@ -31,28 +31,29 @@ model = dict(
         pad_size_divisor=1),
     
     # 第一个backbone (可见光)
-    # 使用 GroupNorm 替代 BN，适配小 batch 训练
+    # 使用 BN + torchvision 预训练权重（稳定可靠）
+    # BN 在 norm_eval=True 模式下使用预训练统计量，不受小batch影响
     backbone=dict(
         type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(1, 2, 3),
-        frozen_stages=1,
-        norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        norm_eval=False,  # GN 不需要 norm_eval
+        frozen_stages=1,  # 冻结stage1
+        norm_cfg=dict(type='BN', requires_grad=False),  # BN固定不训练
+        norm_eval=True,   # 使用预训练的BN统计量
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
     
     # 第二个backbone (SAR)
-    # 使用 GroupNorm 替代 BN，适配小 batch 训练
+    # 使用 BN + torchvision 预训练权重
     backbone2=dict(
         type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(1, 2, 3),
         frozen_stages=1,
-        norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-        norm_eval=False,  # GN 不需要 norm_eval
+        norm_cfg=dict(type='BN', requires_grad=False),
+        norm_eval=True,
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
 
@@ -262,11 +263,15 @@ val_evaluator = dict(
 test_evaluator = val_evaluator
 
 # ==================== 训练配置 ====================
+# 使用FP32训练保证数值稳定性
+# 差异化学习率策略:
+#   - backbone (可见光): lr_mult=0.1，预训练特征已适配，轻微微调
+#   - backbone2 (SAR): lr_mult=0.5，SAR特征差异大，需要更多学习
 optim_wrapper = dict(
-    type='OptimWrapper',
+    type='OptimWrapper',  # 使用FP32训练
     optimizer=dict(
         type='AdamW',
-        lr=0.0001,
+        lr=0.0001,  # 基础学习率
         weight_decay=0.0001),
     clip_grad=dict(max_norm=0.1, norm_type=2),
     # 梯度累积: 每4个batch累积一次梯度更新
@@ -274,8 +279,8 @@ optim_wrapper = dict(
     accumulative_counts=4,
     paramwise_cfg=dict(
         custom_keys={
-            'backbone': dict(lr_mult=0.1),
-            'backbone2': dict(lr_mult=0.1)
+            'backbone': dict(lr_mult=0.1),   # 可见光: 0.1倍学习率微调 (实际lr=0.00001)
+            'backbone2': dict(lr_mult=0.5)   # SAR: 0.5倍学习率，更多适应 (实际lr=0.00005)
         }))
 
 # 学习率调度

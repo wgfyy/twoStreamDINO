@@ -33,5 +33,7 @@ echo "=========================================="
 # python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls
 # 单流DINO 可见光 12轮训练
 # python tools/train.py configs/dino/dino-4scale_r50_8xb2-12e_dota5cls.py --work-dir work_dirs/dino-4scale_r50_8xb2-12e_dota5cls-optical
-# 双流DINO 可见光+SAR 12轮训练 交叉注意力融合
-python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-dualcrossattn
+# 双流DINO 可见光+SAR 12轮训练  空间、通道混合交叉注意力融合+AdaptiveGatedFusion+SelectiveFeatureFusion+梯度累积
+# python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-dualcrossattn
+# 双流DINO 可见光+SAR 12轮训练  空间、通道混合交叉注意力融合+AdaptiveGatedFusion+SelectiveFeatureFusion+GN+梯度累积
+python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-dualcrossattn-GN
