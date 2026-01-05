@@ -33,7 +33,17 @@ echo "=========================================="
 # python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls
 # 单流DINO 可见光 12轮训练
 # python tools/train.py configs/dino/dino-4scale_r50_8xb2-12e_dota5cls.py --work-dir work_dirs/dino-4scale_r50_8xb2-12e_dota5cls-optical
+# 单流DINO 可见光 36轮训练
+# python tools/train.py configs/dino/dino-4scale_r50_8xb2-36e_dota5cls.py --work-dir work_dirs/dino-4scale_r50_8xb2-36e_dota5cls-optical
 # 双流DINO 可见光+SAR 12轮训练  空间、通道混合交叉注意力融合+AdaptiveGatedFusion+SelectiveFeatureFusion+梯度累积
 # python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-dualcrossattn
 # 双流DINO 可见光+SAR 12轮训练  空间、通道混合交叉注意力融合+AdaptiveGatedFusion+SelectiveFeatureFusion+GN+梯度累积
-python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-dualcrossattn-GN
+# python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-dualcrossattn-GN
+# 双流DINO 可见光+SAR 36轮训练  空间、通道混合交叉注意力融合+AdaptiveGatedFusion+SelectiveFeatureFusion+GN+梯度累积
+# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-dualcrossattn-GN
+# 冻结4层backbone，只训练融合层和输出层，load_from = 'work_dirs/dual_stream_dino_r50-36e_dota5cls/epoch_36.pth'
+# python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-dualcrossattn-GN-backbonefreezed
+# 冻结4层backbone，只训练融合层和输出层，load_from = 'work_dirs/dual_stream_dino_r50-36e_dota5cls/epoch_36.pth'
+# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-dualcrossattn-GN-backbonefreezed
+# 双流DINO 可见光+SAR 36轮训练  通道交叉注意力融合+AdaptiveGatedFusion+SelectiveFeatureFusion+GN+梯度累积  先前混合注意力效果不佳,用于排除混合注意力问题,冻结第一层,不load_from
+python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-channelcrossattn-GN

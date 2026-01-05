@@ -249,8 +249,8 @@ class SpatialCrossAttentionBlock(nn.Module):
         self.conv_v2 = nn.Conv2d(in_channels, in_channels, kernel_size=1)
         
         # Learnable parameters Gamma to control attention strength
-        self.gamma1 = nn.Parameter(torch.zeros(1))
-        self.gamma2 = nn.Parameter(torch.zeros(1))
+        self.gamma1 = nn.Parameter(torch.ones(1) * 0.1)
+        self.gamma2 = nn.Parameter(torch.ones(1) * 0.1)
         
         # 3. Fusion module - Use AdaptiveGatedFusion for spatial attention
         self.fusion = AdaptiveGatedFusion(in_channels, out_channels, norm_cfg)
@@ -424,8 +424,8 @@ class ChannelCrossAttentionBlock(nn.Module):
         )
         
         # Learnable channel attention weights
-        self.gamma1 = nn.Parameter(torch.zeros(1))
-        self.gamma2 = nn.Parameter(torch.zeros(1))
+        self.gamma1 = nn.Parameter(torch.ones(1) * 0.1)
+        self.gamma2 = nn.Parameter(torch.ones(1) * 0.1)
         
         # Fusion module - Use SelectiveFeatureFusion for channel attention
         self.fusion = SelectiveFeatureFusion(in_channels, out_channels, norm_cfg)
@@ -586,7 +586,8 @@ class HybridAttentionFusion(nn.Module):
         assert len(in_channels) == len(out_channels)
         assert 0.0 <= fusion_weight <= 1.0, "fusion_weight must be in [0, 1]"
         
-        self.fusion_weight = fusion_weight
+        # 让网络自己学习空间/通道注意力的比例
+        self.fusion_weight = nn.Parameter(torch.tensor(fusion_weight))
         
         # Spatial attention branch
         self.spatial_blocks = nn.ModuleList()

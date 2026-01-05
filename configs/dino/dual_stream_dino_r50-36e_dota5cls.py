@@ -7,6 +7,12 @@ train_cfg = dict(
     type='EpochBasedTrainLoop', max_epochs=max_epochs, val_interval=1)
 param_scheduler = [
     dict(
+        type='LinearLR',
+        start_factor=0.1,  # 初始学习率 = 0.1 * base_lr = 0.00001
+        by_epoch=False,
+        begin=0,
+        end=2000),  # warmup 2000 iters
+    dict(
         type='MultiStepLR',
         begin=0,
         end=max_epochs,

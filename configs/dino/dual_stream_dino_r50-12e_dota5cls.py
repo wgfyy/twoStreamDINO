@@ -1,8 +1,19 @@
 # 双流DINO配置 - 可见光+SAR融合检测 (DOTA 5类)
 # 数据格式: COCO格式
 # 目标类别: plane, ship, harbor, bridge, helicopter
+# 
+# 迁移学习策略:
+#   1. 加载预训练的SimpleChannelFusion双流DINO权重 (backbone已适应光学+SAR)
+#   2. 冻结两个backbone (frozen_stages=4)，专注学习新的注意力融合模块
+#   3. 使用线性warmup让新模块稳定训练
 
 _base_ = ['../_base_/default_runtime.py']
+
+# ==================== 预训练权重 ====================
+# 加载之前训练好的SimpleChannelFusion双流DINO模型
+# 这会加载backbone, backbone2, neck, encoder, decoder, bbox_head等所有权重
+# 新的fusion_module会随机初始化（因为结构不同）
+# load_from = 'work_dirs/dual_stream_dino_r50-36e_dota5cls/epoch_36.pth'
 
 # ==================== 数据集类别定义 ====================
 # DOTA数据集的5个目标类别
@@ -31,21 +42,22 @@ model = dict(
         pad_size_divisor=1),
     
     # 第一个backbone (可见光)
-    # 使用 BN + torchvision 预训练权重（稳定可靠）
-    # BN 在 norm_eval=True 模式下使用预训练统计量，不受小batch影响
+    # 迁移学习策略: 使用预训练的双流DINO backbone权重，冻结全部4个stage
+    # 让模型专注于学习融合模块，加速收敛
     backbone=dict(
         type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(1, 2, 3),
-        frozen_stages=1,  # 冻结stage1
+        frozen_stages=1,  
         norm_cfg=dict(type='BN', requires_grad=False),  # BN固定不训练
         norm_eval=True,   # 使用预训练的BN统计量
         style='pytorch',
+        # 注意: init_cfg 会被 load_from 覆盖，这里保留作为fallback
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
     
     # 第二个backbone (SAR)
-    # 使用 BN + torchvision 预训练权重
+    # 同样使用预训练的双流DINO backbone权重，冻结全部4个stage
     backbone2=dict(
         type='ResNet',
         depth=50,
@@ -84,27 +96,27 @@ model = dict(
     # ),
     
     # 方案3: 通道注意力（内存高效）
-    # fusion_module=dict(
-    #     type='ChannelAttentionFusion',
-    #     in_channels=[512, 1024, 2048],
-    #     out_channels=[512, 1024, 2048],
-    #     reduction=4,  # 通道压缩比
-    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-    #     act_cfg=dict(type='ReLU', inplace=True)
-    # ),
-    
-    # 方案4: 混合注意力（同时使用空间+通道，效果最好但计算量较大）
-    # 使用 GroupNorm: 不依赖batch统计，小batch下更稳定
     fusion_module=dict(
-        type='HybridAttentionFusion',
+        type='ChannelAttentionFusion',
         in_channels=[512, 1024, 2048],
         out_channels=[512, 1024, 2048],
-        downsample_ratio=4,      # 空间注意力的下采样比例
-        channel_reduction=4,      # 通道注意力的压缩比例
-        fusion_weight=0.5,        # 空间和通道注意力的权重 (0.5=均衡)
+        reduction=4,  # 通道压缩比
         norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
         act_cfg=dict(type='ReLU', inplace=True)
     ),
+    
+    # 方案4: 混合注意力（同时使用空间+通道，效果最好但计算量较大）
+    # 使用 GroupNorm: 不依赖batch统计，小batch下更稳定
+    # fusion_module=dict(
+    #     type='HybridAttentionFusion',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=[512, 1024, 2048],
+    #     downsample_ratio=4,      # 空间注意力的下采样比例
+    #     channel_reduction=4,      # 通道注意力的压缩比例
+    #     fusion_weight=0.5,        # 空间和通道注意力的权重 (0.5=均衡)
+    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+    #     act_cfg=dict(type='ReLU', inplace=True)
+    # ),
     
     # Neck
     neck=dict(
@@ -214,7 +226,7 @@ test_pipeline = [
 # 数据加载器配置
 train_dataloader = dict(
     batch_size=2,
-    num_workers=16,
+    num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     batch_sampler=dict(type='AspectRatioBatchSampler'),
@@ -233,7 +245,7 @@ train_dataloader = dict(
 
 val_dataloader = dict(
     batch_size=1,
-    num_workers=16,
+    num_workers=4,
     persistent_workers=True,
     drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
@@ -279,8 +291,10 @@ optim_wrapper = dict(
     accumulative_counts=4,
     paramwise_cfg=dict(
         custom_keys={
-            'backbone': dict(lr_mult=0.1),   # 可见光: 0.1倍学习率微调 (实际lr=0.00001)
-            'backbone2': dict(lr_mult=0.5)   # SAR: 0.5倍学习率，更多适应 (实际lr=0.00005)
+            # backbone已完全冻结(frozen_stages=4)，这里的lr_mult实际上不会生效
+            # 但保留以防将来解冻部分层
+            'backbone': dict(lr_mult=0.0),   # 可见光backbone: 完全冻结
+            'backbone2': dict(lr_mult=0.0)   # SAR backbone: 完全冻结
         }))
 
 # 学习率调度
@@ -292,6 +306,15 @@ val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
 param_scheduler = [
+    # 线性Warmup: 从0.1倍学习率开始，2000 iters内线性上升到基础学习率
+    # 目的: 让新的融合模块在初期稳定探索参数空间
+    dict(
+        type='LinearLR',
+        start_factor=0.1,  # 初始学习率 = 0.1 * base_lr = 0.00001
+        by_epoch=False,
+        begin=0,
+        end=2000),  # warmup 2000 iters
+    # 主学习率调度: 在epoch 8和11时衰减
     dict(
         type='MultiStepLR',
         begin=0,
