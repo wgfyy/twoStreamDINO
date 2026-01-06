@@ -120,7 +120,7 @@ class AdaptiveGatedFusion(nn.Module):
         fused = x1 * gate + x2 * (1 - gate)
         
         # Adjust output
-        out = self.out_conv(fused) + x1 + x2  # Residual connection
+        out = self.out_conv(fused)
         return out
 
 
@@ -189,7 +189,7 @@ class SelectiveFeatureFusion(nn.Module):
         fused = x1 * w1 + x2 * w2
         
         # 5. Output transformation
-        out = self.out_conv(fused) + x1 + x2  # Residual connection
+        out = self.out_conv(fused)
         return out
 
 
