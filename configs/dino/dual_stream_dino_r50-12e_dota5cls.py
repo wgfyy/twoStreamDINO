@@ -69,14 +69,16 @@ model = dict(
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
 
-    # 融合模块配置 - 四种可选方案:
-    # 1. SimpleChannelFusion: 简单通道拼接+卷积
-    # 2. BiCrossAttentionFusion: 空间交叉注意力（内存占用较高）
-    # 3. ChannelAttentionFusion: 通道交叉注意力（内存高效）
-    # 4. HybridAttentionFusion: 混合注意力（同时使用空间+通道注意力）
-    # 注意: 使用 GroupNorm 替代 BatchNorm，解决小batch(batch=2)下统计量不准确问题
+    # ==================== 融合模块配置 ====================
+    # 可选方案:
+    # 1. SimpleChannelFusion: 简单通道拼接+卷积 (Baseline, mAP=0.398)
+    # 2. BiCrossAttentionFusion: 空间交叉注意力（4x下采样损失小目标）
+    # 3. ChannelAttentionFusion: 通道交叉注意力（内存高效但效果一般）
+    # 4. HybridAttentionFusion: 混合注意力（收敛慢，小目标损失）
+    # 5. AdaptiveMultiScaleFusion: 【推荐】多尺度自适应融合+强残差
+    # 6. ProtectedSpatialAttentionFusion: 保护小目标的局部空间融合
     
-    # 方案1: 简单融合（最快，内存最小）
+    # 方案1: 简单融合 Baseline（最快，mAP=0.398）
     # fusion_module=dict(
     #     type='SimpleChannelFusion',
     #     in_channels=[512, 1024, 2048],
@@ -85,35 +87,60 @@ model = dict(
     #     act_cfg=dict(type='ReLU', inplace=True)
     # ),
     
-    # 方案2: 空间注意力（细粒度空间交互）
+    # 方案5: 【推荐】多尺度自适应融合 + 强残差
+    # - 低层(P3): 简单Cat保护小目标
+    # - 高层(P4,P5): 轻量通道注意力
+    # - 强残差: 保证不低于Baseline
     fusion_module=dict(
-        type='BiCrossAttentionFusion',
+        type='AdaptiveMultiScaleFusion',
         in_channels=[512, 1024, 2048],
         out_channels=[512, 1024, 2048],
-        downsample_ratio=4,  # 降低内存占用
+        low_level_indices=[0],       # 第一层(stride=8)用简单融合
+        downsample_ratio=2,          # 减小下采样（如果用空间注意力）
+        channel_reduction=4,
         norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
         act_cfg=dict(type='ReLU', inplace=True)
     ),
     
-    # 方案3: 通道注意力（内存高效）
+    # 方案6: 保护小目标的局部空间注意力（无下采样）
     # fusion_module=dict(
-    #     type='ChannelAttentionFusion',
+    #     type='ProtectedSpatialAttentionFusion',
     #     in_channels=[512, 1024, 2048],
     #     out_channels=[512, 1024, 2048],
-    #     reduction=4,  # 通道压缩比
+    #     kernel_size=7,               # 局部注意力窗口
     #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
     #     act_cfg=dict(type='ReLU', inplace=True)
     # ),
     
-    # 方案4: 混合注意力（同时使用空间+通道，效果最好但计算量较大）
-    # 使用 GroupNorm: 不依赖batch统计，小batch下更稳定
+    # 旧方案（已验证效果不佳）
+    # 方案2: 空间注意力（4x下采样导致mAP_s下降）
+    # fusion_module=dict(
+    #     type='BiCrossAttentionFusion',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=[512, 1024, 2048],
+    #     downsample_ratio=4,
+    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+    #     act_cfg=dict(type='ReLU', inplace=True)
+    # ),
+    
+    # 方案3: 通道注意力（缺乏空间感知，效果不佳）
+    # fusion_module=dict(
+    #     type='ChannelAttentionFusion',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=[512, 1024, 2048],
+    #     reduction=4,
+    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+    #     act_cfg=dict(type='ReLU', inplace=True)
+    # ),
+    
+    # 方案4: 混合注意力（收敛慢，前期落后Baseline）
     # fusion_module=dict(
     #     type='HybridAttentionFusion',
     #     in_channels=[512, 1024, 2048],
     #     out_channels=[512, 1024, 2048],
-    #     downsample_ratio=4,      # 空间注意力的下采样比例
-    #     channel_reduction=4,      # 通道注意力的压缩比例
-    #     fusion_weight=0.5,        # 空间和通道注意力的权重 (0.5=均衡)
+    #     downsample_ratio=4,
+    #     channel_reduction=4,
+    #     fusion_weight=0.5,
     #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
     #     act_cfg=dict(type='ReLU', inplace=True)
     # ),

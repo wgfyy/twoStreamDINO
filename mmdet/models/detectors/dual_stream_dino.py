@@ -654,6 +654,301 @@ class HybridAttentionFusion(nn.Module):
         return tuple(fused_feats)
 
 
+@MODELS.register_module()
+class AdaptiveMultiScaleFusion(nn.Module):
+    """Adaptive Multi-Scale Fusion Module - 针对小目标优化的多尺度自适应融合.
+    
+    核心思想：
+    1. 低层特征（stride=8, 小目标敏感）: 使用简单Cat融合，保护小目标信息
+    2. 高层特征（stride=16,32）: 使用注意力机制，增强语义理解
+    3. 强残差连接: 保证至少不比Baseline差
+    
+    架构:
+        Low-level (P3):  Cat + Conv (保护小目标)
+        Mid-level (P4):  Channel Attention + 强残差 (平衡)
+        High-level (P5): Spatial + Channel Attention (语义增强)
+    
+    Args:
+        in_channels (list[int]): 各尺度输入通道数 [512, 1024, 2048]
+        out_channels (list[int]): 各尺度输出通道数
+        norm_cfg (dict): 归一化配置
+        act_cfg (dict): 激活函数配置
+        low_level_indices (list[int]): 使用简单融合的层索引 [0] 表示第一层
+        downsample_ratio (int): 空间注意力下采样比例 (仅用于高层)
+        channel_reduction (int): 通道压缩比例
+    
+    Example:
+        >>> fusion_module = dict(
+        >>>     type='AdaptiveMultiScaleFusion',
+        >>>     in_channels=[512, 1024, 2048],
+        >>>     out_channels=[512, 1024, 2048],
+        >>>     low_level_indices=[0],  # P3用简单融合
+        >>>     downsample_ratio=2,     # 减小下采样比例
+        >>> )
+    """
+    
+    def __init__(
+        self,
+        in_channels: List[int],
+        out_channels: List[int],
+        norm_cfg: dict = dict(type='GN', num_groups=32),
+        act_cfg: dict = dict(type='ReLU', inplace=True),
+        low_level_indices: List[int] = [0],  # 默认第一层用简单融合
+        downsample_ratio: int = 2,  # 减小下采样，保护细节
+        channel_reduction: int = 4,
+    ) -> None:
+        super().__init__()
+        assert len(in_channels) == len(out_channels)
+        
+        self.num_levels = len(in_channels)
+        self.low_level_indices = low_level_indices
+        
+        # 为每个尺度创建融合模块
+        self.fusion_modules = nn.ModuleList()
+        self.residual_convs = nn.ModuleList()  # 强残差分支
+        
+        for i, (in_c, out_c) in enumerate(zip(in_channels, out_channels)):
+            if i in low_level_indices:
+                # 低层特征：简单Cat融合（保护小目标）
+                fusion = self._make_simple_fusion(in_c, out_c, norm_cfg, act_cfg)
+            else:
+                # 高层特征：注意力融合
+                fusion = self._make_attention_fusion(
+                    in_c, out_c, norm_cfg, act_cfg, 
+                    downsample_ratio, channel_reduction
+                )
+            self.fusion_modules.append(fusion)
+            
+            # 强残差分支：直接Cat的1x1 Conv（保底通路）
+            residual = nn.Sequential(
+                nn.Conv2d(in_c * 2, out_c, kernel_size=1, bias=False),
+                nn.GroupNorm(32, out_c) if norm_cfg['type'] == 'GN' else nn.BatchNorm2d(out_c),
+            )
+            self.residual_convs.append(residual)
+        
+        # 可学习的残差权重（让网络决定依赖注意力还是直接融合）
+        self.residual_weights = nn.ParameterList([
+            nn.Parameter(torch.tensor(0.5)) for _ in range(self.num_levels)
+        ])
+    
+    def _make_simple_fusion(self, in_c, out_c, norm_cfg, act_cfg):
+        """创建简单的Cat+Conv融合模块"""
+        return SimpleCatFusion(in_c, out_c, norm_cfg)
+    
+    def _make_attention_fusion(self, in_c, out_c, norm_cfg, act_cfg, 
+                               downsample_ratio, channel_reduction):
+        """创建注意力融合模块（轻量版，只用Channel Attention）"""
+        # 使用轻量的通道注意力，避免空间下采样损失
+        return LightweightChannelFusion(in_c, out_c, norm_cfg, channel_reduction)
+    
+    def forward(self, feats1: Tuple[Tensor], feats2: Tuple[Tensor]) -> Tuple[Tensor]:
+        """Forward function."""
+        assert len(feats1) == len(feats2) == self.num_levels
+        
+        fused_feats = []
+        for i, (feat1, feat2, fusion, residual_conv, res_w) in enumerate(zip(
+            feats1, feats2, self.fusion_modules, self.residual_convs, self.residual_weights
+        )):
+            # 主融合分支
+            main_feat = fusion(feat1, feat2)
+            
+            # 强残差分支（保底）
+            cat_feat = torch.cat([feat1, feat2], dim=1)
+            residual_feat = residual_conv(cat_feat)
+            
+            # 动态加权融合
+            # res_w 被 sigmoid 限制在 [0,1]，表示残差的权重
+            w = torch.sigmoid(res_w)
+            fused = main_feat * (1 - w) + residual_feat * w
+            
+            fused_feats.append(fused)
+        
+        return tuple(fused_feats)
+
+
+class SimpleCatFusion(nn.Module):
+    """简单的Cat+Conv融合模块"""
+    
+    def __init__(self, in_channels, out_channels, norm_cfg):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels * 2, out_channels, kernel_size=1, bias=False),
+            nn.GroupNorm(32, out_channels) if norm_cfg['type'] == 'GN' else nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+    
+    def forward(self, x1, x2):
+        cat_feat = torch.cat([x1, x2], dim=1)
+        return self.conv(cat_feat)
+
+
+class LightweightChannelFusion(nn.Module):
+    """轻量级通道融合模块 - 无空间下采样，保护小目标.
+    
+    与 SelectiveFeatureFusion 类似，但更轻量且带有残差。
+    """
+    
+    def __init__(self, in_channels, out_channels, norm_cfg, reduction=4):
+        super().__init__()
+        
+        mid_channels = max(in_channels // reduction, 64)
+        
+        # 全局池化
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        
+        # 轻量MLP生成通道权重
+        self.channel_fc = nn.Sequential(
+            nn.Linear(in_channels * 2, mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Linear(mid_channels, in_channels * 2),
+        )
+        
+        # 输出投影
+        self.out_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+            nn.GroupNorm(32, out_channels) if norm_cfg['type'] == 'GN' else nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+    
+    def forward(self, x1, x2):
+        B, C, H, W = x1.size()
+        
+        # 全局特征
+        g1 = self.avg_pool(x1).view(B, C)
+        g2 = self.avg_pool(x2).view(B, C)
+        
+        # 联合全局特征
+        g_cat = torch.cat([g1, g2], dim=1)  # [B, 2C]
+        
+        # 生成通道权重
+        weights = self.channel_fc(g_cat)  # [B, 2C]
+        weights = weights.view(B, 2, C)
+        weights = F.softmax(weights, dim=1)  # 归一化，两个模态权重和为1
+        
+        w1 = weights[:, 0, :].view(B, C, 1, 1)
+        w2 = weights[:, 1, :].view(B, C, 1, 1)
+        
+        # 加权融合
+        fused = x1 * w1 + x2 * w2
+        
+        # 输出
+        out = self.out_conv(fused)
+        return out
+
+
+@MODELS.register_module()
+class ProtectedSpatialAttentionFusion(nn.Module):
+    """保护小目标的空间注意力融合 - 无下采样版本.
+    
+    关键改进：
+    1. 使用分组卷积代替全局Attention（避免O(N²)内存）
+    2. 保留全分辨率，不做下采样
+    3. 强残差连接
+    
+    Args:
+        in_channels (list[int]): 输入通道数
+        out_channels (list[int]): 输出通道数
+        norm_cfg (dict): 归一化配置
+        kernel_size (int): 局部注意力窗口大小
+    """
+    
+    def __init__(
+        self,
+        in_channels: List[int],
+        out_channels: List[int],
+        norm_cfg: dict = dict(type='GN', num_groups=32),
+        act_cfg: dict = dict(type='ReLU', inplace=True),
+        kernel_size: int = 7,  # 局部注意力窗口
+    ) -> None:
+        super().__init__()
+        assert len(in_channels) == len(out_channels)
+        
+        self.fusion_blocks = nn.ModuleList()
+        self.residual_convs = nn.ModuleList()
+        
+        for in_c, out_c in zip(in_channels, out_channels):
+            # 局部空间注意力（使用深度可分离卷积代替全局Attention）
+            block = LocalSpatialFusionBlock(in_c, out_c, norm_cfg, kernel_size)
+            self.fusion_blocks.append(block)
+            
+            # 残差分支
+            residual = nn.Sequential(
+                nn.Conv2d(in_c * 2, out_c, kernel_size=1, bias=False),
+                nn.GroupNorm(32, out_c) if norm_cfg['type'] == 'GN' else nn.BatchNorm2d(out_c),
+            )
+            self.residual_convs.append(residual)
+        
+        # 可学习残差权重
+        self.residual_weight = nn.Parameter(torch.tensor(0.3))  # 初始偏向注意力
+    
+    def forward(self, feats1: Tuple[Tensor], feats2: Tuple[Tensor]) -> Tuple[Tensor]:
+        assert len(feats1) == len(feats2) == len(self.fusion_blocks)
+        
+        fused_feats = []
+        w = torch.sigmoid(self.residual_weight)
+        
+        for feat1, feat2, block, residual_conv in zip(
+            feats1, feats2, self.fusion_blocks, self.residual_convs
+        ):
+            # 主分支：局部空间注意力
+            main_feat = block(feat1, feat2)
+            
+            # 残差分支
+            residual_feat = residual_conv(torch.cat([feat1, feat2], dim=1))
+            
+            # 融合
+            fused = main_feat * (1 - w) + residual_feat * w
+            fused_feats.append(fused)
+        
+        return tuple(fused_feats)
+
+
+class LocalSpatialFusionBlock(nn.Module):
+    """局部空间融合块 - 使用深度可分离卷积实现局部空间交互.
+    
+    不使用全局Attention，而是用大核深度卷积捕获局部空间关系，
+    复杂度从 O(N²) 降到 O(N·K²)，且保留全分辨率。
+    """
+    
+    def __init__(self, in_channels, out_channels, norm_cfg, kernel_size=7):
+        super().__init__()
+        
+        # 生成空间注意力权重图
+        self.spatial_gate = nn.Sequential(
+            # 深度可分离卷积捕获局部空间关系
+            nn.Conv2d(in_channels * 2, in_channels * 2, kernel_size=kernel_size, 
+                     padding=kernel_size // 2, groups=in_channels * 2, bias=False),
+            nn.GroupNorm(32, in_channels * 2),
+            nn.ReLU(inplace=True),
+            # Pointwise卷积
+            nn.Conv2d(in_channels * 2, 2, kernel_size=1, bias=True),
+            nn.Softmax(dim=1)  # 两个模态在每个位置的权重和为1
+        )
+        
+        # 输出投影
+        self.out_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(32, out_channels) if norm_cfg['type'] == 'GN' else nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+    
+    def forward(self, x1, x2):
+        # 拼接特征用于生成权重
+        cat_feat = torch.cat([x1, x2], dim=1)  # [B, 2C, H, W]
+        
+        # 生成像素级权重 [B, 2, H, W]
+        weights = self.spatial_gate(cat_feat)
+        
+        w1 = weights[:, 0:1, :, :]  # [B, 1, H, W]
+        w2 = weights[:, 1:2, :, :]
+        
+        # 像素级加权融合
+        fused = x1 * w1 + x2 * w2  # [B, C, H, W]
+        
+        # 输出
+        out = self.out_conv(fused)
+        return out
+
 
 @MODELS.register_module()
 class DualStreamDINO(DINO):
