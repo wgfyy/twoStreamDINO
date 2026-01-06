@@ -86,24 +86,24 @@ model = dict(
     # ),
     
     # 方案2: 空间注意力（细粒度空间交互）
-    # fusion_module=dict(
-    #     type='BiCrossAttentionFusion',
-    #     in_channels=[512, 1024, 2048],
-    #     out_channels=[512, 1024, 2048],
-    #     downsample_ratio=4,  # 降低内存占用
-    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
-    #     act_cfg=dict(type='ReLU', inplace=True)
-    # ),
-    
-    # 方案3: 通道注意力（内存高效）
     fusion_module=dict(
-        type='ChannelAttentionFusion',
+        type='BiCrossAttentionFusion',
         in_channels=[512, 1024, 2048],
         out_channels=[512, 1024, 2048],
-        reduction=4,  # 通道压缩比
+        downsample_ratio=4,  # 降低内存占用
         norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
         act_cfg=dict(type='ReLU', inplace=True)
     ),
+    
+    # 方案3: 通道注意力（内存高效）
+    # fusion_module=dict(
+    #     type='ChannelAttentionFusion',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=[512, 1024, 2048],
+    #     reduction=4,  # 通道压缩比
+    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+    #     act_cfg=dict(type='ReLU', inplace=True)
+    # ),
     
     # 方案4: 混合注意力（同时使用空间+通道，效果最好但计算量较大）
     # 使用 GroupNorm: 不依赖batch统计，小batch下更稳定

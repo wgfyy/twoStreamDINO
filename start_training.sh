@@ -45,5 +45,7 @@ echo "=========================================="
 # python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-dualcrossattn-GN-backbonefreezed
 # 冻结4层backbone，只训练融合层和输出层，load_from = 'work_dirs/dual_stream_dino_r50-36e_dota5cls/epoch_36.pth'
 # python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-dualcrossattn-GN-backbonefreezed
-# 双流DINO 可见光+SAR 36轮训练  通道交叉注意力融合+AdaptiveGatedFusion+SelectiveFeatureFusion+GN+梯度累积  先前混合注意力效果不佳,用于排除混合注意力问题,冻结第一层,不load_from
-python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-channelcrossattn-GN
+# 双流DINO 可见光+SAR 36轮训练  通道交叉注意力融合+SelectiveFeatureFusion+GN+梯度累积  先前混合注意力效果不佳,用于排除混合注意力问题,冻结第一层,不load_from
+# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-channelcrossattn-GN
+# 双流DINO 可见光+SAR 36轮训练  空间交叉注意力融合+AdaptiveGatedFusion+GN+梯度累积  先前混合注意力效果不佳,用于排除混合注意力问题,冻结第一层,不load_from
+python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-spatialcrossattn-GN
