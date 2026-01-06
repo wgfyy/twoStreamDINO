@@ -120,7 +120,7 @@ class AdaptiveGatedFusion(nn.Module):
         fused = x1 * gate + x2 * (1 - gate)
         
         # Adjust output
-        out = self.out_conv(fused)
+        out = self.out_conv(fused) + x1 + x2  # Residual connection
         return out
 
 
@@ -189,7 +189,7 @@ class SelectiveFeatureFusion(nn.Module):
         fused = x1 * w1 + x2 * w2
         
         # 5. Output transformation
-        out = self.out_conv(fused)
+        out = self.out_conv(fused) + x1 + x2  # Residual connection
         return out
 
 
@@ -286,7 +286,7 @@ class SpatialCrossAttentionBlock(nn.Module):
         # Aggregate SAR's Value to RGB
         out1 = torch.bmm(v2, attn12.permute(0, 2, 1)).view(B, C, H_down, W_down)
         out1 = F.interpolate(out1, size=(H, W), mode='bilinear', align_corners=False)  # Upsample to match x1
-        x1_new = self.gamma1 * out1 + x1  # Residual connection
+        x1_new = self.gamma1 * out1
         
         # --- Branch 2: RGB assists SAR (RGB as Key/Value, SAR as Query) ---
         q2 = self.conv_q2(x2_down).view(B, -1, N_down).permute(0, 2, 1)
@@ -298,7 +298,7 @@ class SpatialCrossAttentionBlock(nn.Module):
         
         out2 = torch.bmm(v1, attn21.permute(0, 2, 1)).view(B, C, H_down, W_down)
         out2 = F.interpolate(out2, size=(H, W), mode='bilinear', align_corners=False)  # Upsample to match x2
-        x2_new = self.gamma2 * out2 + x2
+        x2_new = self.gamma2 * out2
         
         # --- Final fusion using AdaptiveGatedFusion ---
         x_fused = self.fusion(x1_new, x2_new)
@@ -464,7 +464,7 @@ class ChannelCrossAttentionBlock(nn.Module):
         # Apply channel attention to value (element-wise)
         out1 = attn12 * v2  # [B, C]
         out1 = out1.view(B, C, 1, 1).expand_as(x1)  # Broadcast to spatial dims
-        x1_new = self.gamma1 * out1 + x1
+        x1_new = self.gamma1 * out1
         
         # --- Branch 2: Optical guides SAR channel attention ---
         q2 = self.fc2_q(x2_pool)  # [B, C']
@@ -478,7 +478,7 @@ class ChannelCrossAttentionBlock(nn.Module):
         # Apply attention
         out2 = attn21 * v1  # [B, C]
         out2 = out2.view(B, C, 1, 1).expand_as(x2)
-        x2_new = self.gamma2 * out2 + x2
+        x2_new = self.gamma2 * out2
         
         # Final fusion using SelectiveFeatureFusion
         x_fused = self.fusion(x1_new, x2_new)
