@@ -48,4 +48,14 @@ echo "=========================================="
 # 双流DINO 可见光+SAR 36轮训练  通道交叉注意力融合+SelectiveFeatureFusion+GN+梯度累积  先前混合注意力效果不佳,用于排除混合注意力问题,冻结第一层,不load_from
 # python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-channelcrossattn-GN
 # 双流DINO 可见光+SAR 36轮训练  空间交叉注意力融合+AdaptiveGatedFusion+GN+梯度累积  先前混合注意力效果不佳,用于排除混合注意力问题,冻结第一层,不load_from
-python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-spatialcrossattn-GN
+# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-spatialcrossattn-GN
+# 双流DINO 可见光+SAR 12轮训练  自适应多尺度融合+GN+梯度累积  冻结第一层,load_from预训练模型
+# python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-adaptivemultiscale-GN
+# 双流DINO 可见光+SAR 12轮训练  通道交叉注意力融合+SelectiveFeatureFusion+GN+梯度累积  冻结第一层,load_from
+# python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls-channelcrossattn-GN
+# 双流DINO 可见光+SAR 36轮训练  自适应多尺度融合+GN+梯度累积  冻结第一层，load_from=None
+# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale-GN
+# 双流DINO 可见光+SAR 36轮训练  自适应多尺度融合2+GN+梯度累积  冻结第一层，load_from=None
+# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale2-GN
+# 双流DINO 可见光+SAR 36轮训练  自适应多尺度融合3(DW卷积+GAP)+GN+梯度累积  冻结第一层，load_from=None
+python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale3-GN

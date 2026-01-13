@@ -10,10 +10,10 @@
 _base_ = ['../_base_/default_runtime.py']
 
 # ==================== 预训练权重 ====================
-# 加载之前训练好的SimpleChannelFusion双流DINO模型
-# 这会加载backbone, backbone2, neck, encoder, decoder, bbox_head等所有权重
-# 新的fusion_module会随机初始化（因为结构不同）
+# 从头训练（与Baseline条件一致，公平对比）
+# 如需迁移学习，取消下面注释：
 # load_from = 'work_dirs/dual_stream_dino_r50-36e_dota5cls/epoch_36.pth'
+load_from = None
 
 # ==================== 数据集类别定义 ====================
 # DOTA数据集的5个目标类别
@@ -75,8 +75,10 @@ model = dict(
     # 2. BiCrossAttentionFusion: 空间交叉注意力（4x下采样损失小目标）
     # 3. ChannelAttentionFusion: 通道交叉注意力（内存高效但效果一般）
     # 4. HybridAttentionFusion: 混合注意力（收敛慢，小目标损失）
-    # 5. AdaptiveMultiScaleFusion: 【推荐】多尺度自适应融合+强残差
+    # 5. AdaptiveMultiScaleFusion: 多尺度自适应融合+强残差 (mAP=0.410)
     # 6. ProtectedSpatialAttentionFusion: 保护小目标的局部空间融合
+    # 7. AdaptiveMultiScaleFusion2: P5加空间+通道联合注意力 (mAP=0.409)
+    # 8. AdaptiveMultiScaleFusion3: 【推荐】增强型注意力融合，gamma=0保底
     
     # 方案1: 简单融合 Baseline（最快，mAP=0.398）
     # fusion_module=dict(
@@ -87,20 +89,35 @@ model = dict(
     #     act_cfg=dict(type='ReLU', inplace=True)
     # ),
     
-    # 方案5: 【推荐】多尺度自适应融合 + 强残差
-    # - 低层(P3): 简单Cat保护小目标
-    # - 高层(P4,P5): 轻量通道注意力
-    # - 强残差: 保证不低于Baseline
+    # 方案8: 【当前使用】AdaptiveMultiScaleFusion3 - 增强型注意力融合
+    # 核心改进：
+    # - gamma=0初始化：起点等同SimpleCat，保证 ≥ 0.41 mAP
+    # - 先融合后增强：Cat→Conv→base_feat，再用注意力增强
+    # - 空间×通道相乘：同时关注"哪里"和"什么"重要
+    # - 注入式残差：Out = Base + gamma * (Base * Attention)
     fusion_module=dict(
-        type='AdaptiveMultiScaleFusion',
+        type='AdaptiveMultiScaleFusion3',
         in_channels=[512, 1024, 2048],
         out_channels=[512, 1024, 2048],
-        low_level_indices=[0],       # 第一层(stride=8)用简单融合
-        downsample_ratio=2,          # 减小下采样（如果用空间注意力）
-        channel_reduction=4,
+        low_level_indices=[0],       # P3用简单融合（保护小目标）
+        spatial_kernel_size=7,       # 空间注意力卷积核大小
+        channel_reduction=4,         # 通道注意力降维比例
         norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
         act_cfg=dict(type='ReLU', inplace=True)
     ),
+    
+    # 方案7: AdaptiveMultiScaleFusion2 (mAP=0.409)
+    # fusion_module=dict(
+    #     type='AdaptiveMultiScaleFusion2',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=[512, 1024, 2048],
+    #     low_level_indices=[0],
+    #     high_level_indices=[2],
+    #     spatial_kernel_size=7,
+    #     channel_reduction=4,
+    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+    #     act_cfg=dict(type='ReLU', inplace=True)
+    # ),
     
     # 方案6: 保护小目标的局部空间注意力（无下采样）
     # fusion_module=dict(
@@ -320,8 +337,8 @@ optim_wrapper = dict(
         custom_keys={
             # backbone已完全冻结(frozen_stages=4)，这里的lr_mult实际上不会生效
             # 但保留以防将来解冻部分层
-            'backbone': dict(lr_mult=0.0),   # 可见光backbone: 完全冻结
-            'backbone2': dict(lr_mult=0.0)   # SAR backbone: 完全冻结
+            'backbone': dict(lr_mult=0.1),
+            'backbone2': dict(lr_mult=0.1)
         }))
 
 # 学习率调度
