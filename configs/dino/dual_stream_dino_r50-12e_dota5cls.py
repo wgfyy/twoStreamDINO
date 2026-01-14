@@ -269,8 +269,8 @@ test_pipeline = [
 
 # 数据加载器配置
 train_dataloader = dict(
-    batch_size=4,
-    num_workers=16,
+    batch_size=4,  # 32G显存可尝试增加到4或更高
+    num_workers=16, # 增加workers以匹配更快的GPU吞吐
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     batch_sampler=dict(type='AspectRatioBatchSampler'),
@@ -288,7 +288,7 @@ train_dataloader = dict(
         backend_args=backend_args))
 
 val_dataloader = dict(
-    batch_size=1,
+    batch_size=4,  # 验证推理不涉及梯度及优化器状态，显存占用较小，可大胆提升
     num_workers=16,
     persistent_workers=True,
     drop_last=False,
@@ -330,9 +330,9 @@ optim_wrapper = dict(
         lr=0.0001,  # 基础学习率
         weight_decay=0.0001),
     clip_grad=dict(max_norm=0.1, norm_type=2),
-    # 梯度累积: 每4个batch累积一次梯度更新
-    # 有效batch_size = 2 × 4 = 8
-    accumulative_counts=4,
+    # 梯度累积: 调整为2，保持 effective_batch_size = 4 * 2 = 8 不变
+    # 原并不是: batch=2, accum=4 => effective=8
+    accumulative_counts=2,
     paramwise_cfg=dict(
         custom_keys={
             # backbone已完全冻结(frozen_stages=4)，这里的lr_mult实际上不会生效
