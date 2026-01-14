@@ -8,8 +8,8 @@ conda activate mmdet
 # 设置 Python 路径
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
-CONFIG="configs/dino/dual_stream_dino_r50_dota5cls.py"
-WORK_DIR="work_dirs/dual_stream_dino_r50_dota5cls"
+CONFIG="configs/dino/dual_stream_dino_r50-12e_dota5cls.py"
+WORK_DIR="work_dirs/dual_stream_dino_r50-12e_dota5cls"
 
 echo "=========================================="
 echo "双流DINO训练 - 可见光+SAR融合检测"
@@ -58,4 +58,4 @@ echo "=========================================="
 # 双流DINO 可见光+SAR 36轮训练  自适应多尺度融合2+GN+梯度累积  冻结第一层，load_from=None
 python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale2-GN
 # 双流DINO 可见光+SAR 36轮训练  自适应多尺度融合3(DW卷积+GAP)+GN+梯度累积  冻结第一层，load_from=None
-# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale3-GN
+# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale3-
