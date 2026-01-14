@@ -1109,113 +1109,149 @@ class AdaptiveMultiScaleFusion2(nn.Module):
 
 
 class EnhancedAttentionFusion(nn.Module):
-    """增强型注意力融合：结合 局部空间感知(Local Spatial) + 通道感知(Channel).
+    """(已弃用) 增强型注意力融合：结合 局部空间感知 + 通道感知.
+    注：前一版基于Injection(注入)机制的实现效果不佳(mAP 39.5)。
+    分析原因：在异构模态融合中，'选择'(Selection)机制通常优于'增强'(Enhancement)机制。
+    如果各个模态都没对齐或含噪，先融合再增强会引入无法消除的噪声。
+    """
+    pass
+
+class DualPathChannelFusion(nn.Module):
+    """双通路轻量级通道融合 (GAP + GMP).
     
-    核心设计：
-    1. 先融合后增强：先Cat+Conv得到base_feat，再用注意力增强
-    2. gamma=0初始化：训练初期等同于SimpleCat，保证起点稳定
-    3. 空间×通道：同时关注"哪里"(Where)和"什么"(What)重要
+    在 LightweightChannelFusion (仅AvgPool) 的基础上，增加了 MaxPool 分支。
+    对于 DOTA 这种小目标数据集，AvgPool 容易平滑掉微小目标的高响应特征，
+    引入 MaxPool 可以更好地保留显著性特征。
     
-    结构：
-    - Local Spatial Branch: 使用 DW-Conv 感知局部纹理/边缘
-    - Channel Branch: 使用 GAP 感知全局语义  
-    - 注入式融合: Out = Base + gamma * (Base * Spatial * Channel)
+    架构：
+              /-> AvgPool ->\
+    x -> [GAP]               Concat -> MLP -> Split -> Sigmoid -> x1*w1 + x2*w2
+         [GMP] \-> MaxPool ->/
+    """
     
-    Args:
-        in_channels (int): 输入通道数（单模态）
-        out_channels (int): 输出通道数
-        norm_cfg (dict): 归一化配置
-        kernel_size (int): 空间注意力卷积核大小
-        channel_reduction (int): 通道注意力降维比例
+    def __init__(self, in_channels, out_channels, norm_cfg, reduction=4):
+        super().__init__()
+        
+        mid_channels = max(in_channels // reduction, 64)
+        
+        # 全局池化
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        # 轻量MLP生成通道权重
+        # 输入维度是 2 (Avg+Max) * 2 (Modality) * C = 4C
+        self.channel_fc = nn.Sequential(
+            nn.Linear(in_channels * 4, mid_channels),
+            nn.ReLU(inplace=True),
+            nn.Linear(mid_channels, in_channels * 2),
+        )
+        
+        # 输出投影
+        self.out_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+            nn.GroupNorm(32, out_channels) if norm_cfg['type'] == 'GN' else nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+    
+    def forward(self, x1, x2):
+        B, C, H, W = x1.size()
+        
+        # 1. 提取全局统计量
+        # Modality 1
+        g1_avg = self.avg_pool(x1).view(B, C)
+        g1_max = self.max_pool(x1).view(B, C)
+        # Modality 2
+        g2_avg = self.avg_pool(x2).view(B, C)
+        g2_max = self.max_pool(x2).view(B, C)
+        
+        # 2. 拼接所有统计量 [B, 4C]
+        g_cat = torch.cat([g1_avg, g1_max, g2_avg, g2_max], dim=1)
+        
+        # 3. 生成通道权重
+        weights = self.channel_fc(g_cat)  # [B, 2C]
+        weights = weights.view(B, 2, C)
+        weights = F.softmax(weights, dim=1)  # 互斥归一化: w1 + w2 = 1
+        
+        w1 = weights[:, 0, :].view(B, C, 1, 1)
+        w2 = weights[:, 1, :].view(B, C, 1, 1)
+        
+        # 4. 选择性融合 (Selection Mechanism)
+        fused = x1 * w1 + x2 * w2
+        
+        # 5. 输出变换
+        out = self.out_conv(fused)
+        return out
+
+
+class LocalSpatialDualPathFusion(nn.Module):
+    """局部空间 + 双路通道(Avg+Max) 融合模块 (for v3 P5).
+    
+    结合了 LocalSpatialFusionBlock (v2 P5的核心优势，空间感知) 
+    和 DualPathChannelFusion (v3的核心优势，小目标捕捉)。
     """
     
     def __init__(self, in_channels, out_channels, norm_cfg, kernel_size=7, channel_reduction=4):
         super().__init__()
         
-        # 1. 基础变换 (Cat后降维)
-        self.reduce_conv = nn.Sequential(
+        # 1. 局部空间注意力分支 (继承自 v2)
+        # 使用 DW-Conv 感知局部空间上下文，无下采样
+        self.spatial_branch = LocalSpatialFusionBlock(
+            in_channels, in_channels, norm_cfg, kernel_size
+        )
+        
+        # 2. 双路通道注意力分支 (继承自 v3 Revised)
+        # 使用 Avg+Max Pooling 增强小目标
+        self.channel_branch = DualPathChannelFusion(
+            in_channels, in_channels, norm_cfg, channel_reduction
+        )
+        
+        # 3. 融合两个分支
+        self.fusion_conv = nn.Sequential(
             nn.Conv2d(in_channels * 2, out_channels, kernel_size=1, bias=False),
             nn.GroupNorm(32, out_channels) if norm_cfg['type'] == 'GN' else nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
         
-        # 2. 局部空间注意力 (DW-Conv捕获局部信息，不改变分辨率)
-        self.local_spatial = nn.Sequential(
-            nn.Conv2d(out_channels, out_channels, kernel_size=kernel_size,
-                      padding=kernel_size // 2, groups=out_channels, bias=False),
-            nn.GroupNorm(32, out_channels) if norm_cfg['type'] == 'GN' else nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=1),
-            nn.Sigmoid()  # 输出空间权重 mask [0, 1]
-        )
-        
-        # 3. 通道注意力 (轻量级SE-like)
-        mid_channels = max(out_channels // channel_reduction, 64)
-        self.channel_attn = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(out_channels, mid_channels, kernel_size=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(mid_channels, out_channels, kernel_size=1),
-            nn.Sigmoid()  # 输出通道权重 [0, 1]
-        )
-        
-        # 4. 可学习的注入权重，初始化为 0 (关键！保证起点稳定)
-        self.gamma = nn.Parameter(torch.zeros(1))
+        # 可学习的分支权重
+        self.spatial_weight = nn.Parameter(torch.tensor(0.5))
     
     def forward(self, x1, x2):
-        # 先拼接
-        cat_feat = torch.cat([x1, x2], dim=1)
+        # 空间分支
+        spatial_out = self.spatial_branch(x1, x2)
         
-        # 基础特征 (Baseline，等同于SimpleCat)
-        base_feat = self.reduce_conv(cat_feat)
+        # 通道分支
+        channel_out = self.channel_branch(x1, x2)
         
-        # 计算注意力
-        # 空间权重：关注"哪里"重要 (Where) - 局部纹理、边缘
-        spatial_mask = self.local_spatial(base_feat)
-        # 通道权重：关注"什么"重要 (What) - 全局语义
-        channel_weight = self.channel_attn(base_feat)
+        # 加权融合
+        w = torch.sigmoid(self.spatial_weight)
         
-        # 联合注意力：同时在空间和通道维度进行增强
-        attn_map = spatial_mask * channel_weight
-        
-        # 注入式融合：
-        # gamma=0时: Out = Base + 0 * (...) = Base (等同SimpleCat)
-        # 随着训练, gamma增大, 注意力逐渐生效
-        out = base_feat + self.gamma * (base_feat * attn_map)
+        # 拼接融合: 空间 * w + 通道 * (1-w)
+        combined = torch.cat([spatial_out * w, channel_out * (1 - w)], dim=1)
+        out = self.fusion_conv(combined)
         
         return out
 
 
 @MODELS.register_module()
 class AdaptiveMultiScaleFusion3(nn.Module):
-    """Adaptive Multi-Scale Fusion v3 - 使用增强型注意力融合.
+    """Adaptive Multi-Scale Fusion v3 (Final) - 基于 v2 架构的 MaxPool 增强版.
     
-    相比 v1/v2 的改进：
-    1. 使用 EnhancedAttentionFusion 替代 LightweightChannelFusion
-    2. gamma=0 初始化保证起点 ≥ SimpleCat (41.0% mAP)
-    3. 空间×通道联合注意力，更精细的特征增强
+    结合用户反馈：
+    1. v2 (P5使用空间注意力) 的 mAP50 表现出色，说明高层特征需要空间定位感。
+    2. v3 Revised (Avg+Max) 对小目标捕捉更准。
     
-    架构：
-    - P3 (low_level): SimpleCat (保护小目标)
-    - P4, P5 (attention_level): EnhancedAttentionFusion (空间+通道增强)
+    融合方案：
+    - 整体架构遵循 v2：Low(P3) / Mid(P4) / High(P5) 差异化处理。
+    - P3 (Low): SimpleCat (不使用注意力，保护最细微特征)
+    - P4 (Mid): DualPathChannelFusion (用 Avg+Max 替代原本的 LightweightChannel)
+    - P5 (High): LocalSpatialDualPath (用 Avg+Max 替代原本的 LightweightChannel，保留 Spatial)
     
     Args:
-        in_channels (list[int]): 各尺度输入通道数 [512, 1024, 2048]
+        in_channels (list[int]): 各尺度输入通道数
         out_channels (list[int]): 各尺度输出通道数
         norm_cfg (dict): 归一化配置
-        low_level_indices (list[int]): 使用SimpleCat的层索引，默认[0]
-        spatial_kernel_size (int): 空间注意力卷积核大小
-        channel_reduction (int): 通道注意力降维比例
-    
-    Example:
-        >>> fusion_module = dict(
-        >>>     type='AdaptiveMultiScaleFusion3',
-        >>>     in_channels=[512, 1024, 2048],
-        >>>     out_channels=[512, 1024, 2048],
-        >>>     low_level_indices=[0],
-        >>>     spatial_kernel_size=7,
-        >>>     channel_reduction=4,
-        >>> )
+        low_level_indices (list[int]): 默认 [0] (P3)
+        high_level_indices (list[int]): 默认 [2] (P5)
     """
     
     def __init__(
@@ -1224,7 +1260,8 @@ class AdaptiveMultiScaleFusion3(nn.Module):
         out_channels: List[int],
         norm_cfg: dict = dict(type='GN', num_groups=32),
         act_cfg: dict = dict(type='ReLU', inplace=True),
-        low_level_indices: List[int] = [0],
+        low_level_indices: List[int] = [0],   # P3
+        high_level_indices: List[int] = [2],  # P5
         spatial_kernel_size: int = 7,
         channel_reduction: int = 4,
     ) -> None:
@@ -1233,30 +1270,61 @@ class AdaptiveMultiScaleFusion3(nn.Module):
         
         self.num_levels = len(in_channels)
         self.low_level_indices = low_level_indices
+        self.high_level_indices = high_level_indices
         
-        # 为每个尺度创建融合模块
         self.fusion_modules = nn.ModuleList()
+        self.residual_convs = nn.ModuleList()
         
         for i, (in_c, out_c) in enumerate(zip(in_channels, out_channels)):
             if i in low_level_indices:
-                # 低层特征 (P3): 简单Cat融合（保护小目标）
+                # P3: 简单Cat融合 (保护小目标)
                 fusion = SimpleCatFusion(in_c, out_c, norm_cfg)
-            else:
-                # 中高层特征 (P4, P5): 增强型注意力融合
-                fusion = EnhancedAttentionFusion(
-                    in_c, out_c, norm_cfg,
+            elif i in high_level_indices:
+                # P5: 空间感知 + 双路通道注意力 (High Level语义+定位)
+                fusion = LocalSpatialDualPathFusion(
+                    in_c, out_c, norm_cfg, 
                     spatial_kernel_size, channel_reduction
                 )
+            else:
+                # P4: 双路通道注意力 (Mid Level特征增强)
+                fusion = DualPathChannelFusion(
+                    in_c, out_c, norm_cfg, channel_reduction
+                )
+            
             self.fusion_modules.append(fusion)
+            
+            # 强残差分支
+            residual = nn.Sequential(
+                nn.Conv2d(in_c * 2, out_c, kernel_size=1, bias=False),
+                nn.GroupNorm(32, out_c) if norm_cfg['type'] == 'GN' else nn.BatchNorm2d(out_channels),
+            )
+            self.residual_convs.append(residual)
+
+        # 可学习的残差权重
+        self.residual_weights = nn.ParameterList([
+            nn.Parameter(torch.tensor(0.5)) for _ in range(self.num_levels)
+        ])
     
     def forward(self, feats1: Tuple[Tensor], feats2: Tuple[Tensor]) -> Tuple[Tensor]:
         """Forward function."""
         assert len(feats1) == len(feats2) == self.num_levels
         
         fused_feats = []
-        for feat1, feat2, fusion in zip(feats1, feats2, self.fusion_modules):
-            fused_feat = fusion(feat1, feat2)
-            fused_feats.append(fused_feat)
+        for i, (feat1, feat2, fusion, residual_conv, res_w) in enumerate(zip(
+            feats1, feats2, self.fusion_modules, self.residual_convs, self.residual_weights
+        )):
+            # 主融合分支
+            main_feat = fusion(feat1, feat2)
+            
+            # 强残差分支
+            cat_feat = torch.cat([feat1, feat2], dim=1)
+            residual_feat = residual_conv(cat_feat)
+            
+            # 动态加权
+            w = torch.sigmoid(res_w)
+            fused = main_feat * (1 - w) + residual_feat * w
+            
+            fused_feats.append(fused)
         
         return tuple(fused_feats)
 

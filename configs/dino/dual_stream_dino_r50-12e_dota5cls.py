@@ -95,13 +95,27 @@ model = dict(
     # - 先融合后增强：Cat→Conv→base_feat，再用注意力增强
     # - 空间×通道相乘：同时关注"哪里"和"什么"重要
     # - 注入式残差：Out = Base + gamma * (Base * Attention)
+    # fusion_module=dict(
+    #     type='AdaptiveMultiScaleFusion3',
+    #     in_channels=[512, 1024, 2048],
+    #     out_channels=[512, 1024, 2048],
+    #     low_level_indices=[0],       # P3用简单融合（保护小目标）
+    #     spatial_kernel_size=7,       # 空间注意力卷积核大小
+    #     channel_reduction=4,         # 通道注意力降维比例
+    #     norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
+    #     act_cfg=dict(type='ReLU', inplace=True)
+    # ),
+    
+    # 方案8: AdaptiveMultiScaleFusion3 (v3 Final) - v2架构 + MaxPool增强
+    # 预期 mAP > 41.0% (v1) 且保持高 mAP50
     fusion_module=dict(
         type='AdaptiveMultiScaleFusion3',
         in_channels=[512, 1024, 2048],
         out_channels=[512, 1024, 2048],
-        low_level_indices=[0],       # P3用简单融合（保护小目标）
-        spatial_kernel_size=7,       # 空间注意力卷积核大小
-        channel_reduction=4,         # 通道注意力降维比例
+        low_level_indices=[0],    # P3: SimpleCat (保护小目标)
+        high_level_indices=[2],   # P5: LocalSpatial + DualPathChannel
+        spatial_kernel_size=7,
+        channel_reduction=4,
         norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
         act_cfg=dict(type='ReLU', inplace=True)
     ),
@@ -376,7 +390,7 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=50),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=3, max_keep_ckpts=5),
+    checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=2),
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='DetVisualizationHook'))
 
