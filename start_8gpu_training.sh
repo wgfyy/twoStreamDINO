@@ -8,8 +8,8 @@ conda activate mmdet
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
 # 基础配置
-CONFIG="configs/dino/dual_stream_dino_r50-50e_dota5cls.py"
-WORK_DIR="work_dirs/dual_stream_dino_r50-50e_dota5cls-adaptivemultiscale3-GN_8gpu"
+CONFIG="configs/dino/dual_stream_dino_r50-12e_M4SAR6cls.py"
+WORK_DIR="work_dirs/dual_stream_dino_r50-12e_M4SAR6cls-adaptivemultiscale3-GN_8gpu"
 GPUS=8
 PORT=29600
 
@@ -19,7 +19,7 @@ echo "Effective Batch Size: 32 (8 GPUs * 4 Imgs)"
 echo "------------------------------------------"
 echo "参数调整:"
 echo "1. Accumulative Counts: 1 (关闭累积)"
-echo "2. Learning Rate: 0.0008 (线性缩放 4x)"
+echo "2. Learning Rate: 0.0004 (线性缩放 2x)"
 echo "3. Num Workers: 10 (适配 128 核 CPU)"
 echo "4. Log Interval: 10 (适应快速迭代)"
 echo "=========================================="

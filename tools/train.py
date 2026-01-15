@@ -3,6 +3,15 @@ import argparse
 import logging
 import os
 import os.path as osp
+import torch
+
+# Monkey patch torch.load to default weights_only=False to fix resume issue with PyTorch 2.6+
+_original_torch_load = torch.load
+def _torch_load_wrapper(*args, **kwargs):
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _torch_load_wrapper
 
 from mmengine.config import Config, DictAction
 from mmengine.logging import print_log
