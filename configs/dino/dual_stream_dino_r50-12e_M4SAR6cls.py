@@ -36,40 +36,37 @@ model = dict(
         # 模态1 (可见光/RGB) 归一化参数
         mean=[68.2889, 69.7257, 63.8162],
         std=[42.0301, 40.4180, 40.2962],
-        # 模态2 (SAR) 归一化参数 - 使用 DOTA SAR split 计算得到的统计值
-        # mean2=[123.675, 116.28, 103.53],
-        # std2=[58.395, 57.12, 57.375],
-        mean2=[24.034, 23.829, 23.283],
-        std2=[39.340, 39.338, 38.525],
+        # 模态2 (SAR) 归一化参数
+        mean2=[95.7044, 95.7044, 95.7044],
+        std2=[49.4099, 49.4099, 49.4099],
         bgr_to_rgb=True,
         bgr_to_rgb2=True,
         pad_size_divisor=1),
     
     # 第一个backbone (可见光)
-    # 迁移学习策略: 使用预训练的双流DINO backbone权重，冻结全部4个stage
-    # 让模型专注于学习融合模块，加速收敛
+    # 8卡等效大batch，解冻BN并使用SyncBN同步统计量，允许梯度更新；保留较小的lr_mult微调
     backbone=dict(
         type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(1, 2, 3),
-        frozen_stages=1,  
-        norm_cfg=dict(type='BN', requires_grad=False),  # BN固定不训练
-        norm_eval=True,   # 使用预训练的BN统计量
+        frozen_stages=0,
+        norm_cfg=dict(type='SyncBN', requires_grad=True),  # 训练BN，使用同步统计量
+        norm_eval=False,   # 训练时更新BN均值方差
         style='pytorch',
         # 注意: init_cfg 会被 load_from 覆盖，这里保留作为fallback
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
     
     # 第二个backbone (SAR)
-    # 同样使用预训练的双流DINO backbone权重，冻结全部4个stage
+    # 同样解冻BN并使用SyncBN
     backbone2=dict(
         type='ResNet',
         depth=50,
         num_stages=4,
         out_indices=(1, 2, 3),
-        frozen_stages=1,
-        norm_cfg=dict(type='BN', requires_grad=False),
-        norm_eval=True,
+        frozen_stages=0,
+        norm_cfg=dict(type='SyncBN', requires_grad=True),
+        norm_eval=False,
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
 
