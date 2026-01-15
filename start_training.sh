@@ -8,8 +8,8 @@ conda activate mmdet
 # 设置 Python 路径
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
-CONFIG="configs/dino/dual_stream_dino_r50-12e_dota5cls.py"
-WORK_DIR="work_dirs/dual_stream_dino_r50-12e_dota5cls"
+CONFIG="configs/dino/dual_stream_dino_r50-12e_M4SAR6cls.py"
+WORK_DIR="work_dirs/dual_stream_dino_r50-12e_M4SAR6cls-adaptivemultiscale3-GN"
 
 echo "=========================================="
 echo "双流DINO训练 - 可见光+SAR融合检测"
@@ -17,15 +17,10 @@ echo "=========================================="
 echo "配置文件: $CONFIG"
 echo "工作目录: $WORK_DIR"
 echo ""
-echo "数据集信息:"
-echo "  - 训练样本: 6136 张"
-echo "  - 标注数量: 90329 个"
-echo "  - 类别: plane, ship, harbor, bridge, helicopter"
-echo ""
 echo "开始训练..."
 echo "=========================================="
 
-# python tools/train.py $CONFIG --work-dir $WORK_DIR
+python tools/train.py $CONFIG --work-dir $WORK_DIR
 # 以下为不同训练配置的命令示例
 # 双流DINO cat+conv融合 12轮训练
 # python tools/train.py configs/dino/dual_stream_dino_r50-12e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-12e_dota5cls
@@ -56,6 +51,6 @@ echo "=========================================="
 # 双流DINO 可见光+SAR 36轮训练  自适应多尺度融合+GN+梯度累积  冻结第一层，load_from=None
 # python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale-GN
 # 双流DINO 可见光+SAR 36轮训练  自适应多尺度融合2+GN+梯度累积  冻结第一层，load_from=None
-python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale2-GN
+# python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale2-GN
 # 双流DINO 可见光+SAR 36轮训练  自适应多尺度融合3(DW卷积+GAP)+GN+梯度累积  冻结第一层，load_from=None
 # python tools/train.py configs/dino/dual_stream_dino_r50-36e_dota5cls.py --work-dir work_dirs/dual_stream_dino_r50-36e_dota5cls-adaptivemultiscale3-
