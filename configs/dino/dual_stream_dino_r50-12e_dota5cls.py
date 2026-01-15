@@ -35,6 +35,8 @@ model = dict(
         mean=[123.675, 116.28, 103.53],
         std=[58.395, 57.12, 57.375],
         # 模态2 (SAR) 归一化参数 - 使用 DOTA SAR split 计算得到的统计值
+        # mean2=[123.675, 116.28, 103.53],
+        # std2=[58.395, 57.12, 57.375],
         mean2=[24.034, 23.829, 23.283],
         std2=[39.340, 39.338, 38.525],
         bgr_to_rgb=True,
@@ -341,7 +343,7 @@ optim_wrapper = dict(
     type='OptimWrapper',  # 使用FP32训练
     optimizer=dict(
         type='AdamW',
-        lr=0.0001,  # 基础学习率
+        lr=0.0002,  # 基础学习率
         weight_decay=0.0001),
     clip_grad=dict(max_norm=0.1, norm_type=2),
     # 梯度累积: 调整为2，保持 effective_batch_size = 4 * 2 = 8 不变
