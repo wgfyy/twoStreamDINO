@@ -10,6 +10,7 @@ from .hungarian_assigner import HungarianAssigner
 from .iou2d_calculator import BboxOverlaps2D
 from .match_cost import (BBoxL1Cost, ClassificationCost, CrossEntropyLossCost,
                          DiceCost, FocalLossCost, IoUCost)
+from .rotated_match_cost import RotatedIoUCost
 from .max_iou_assigner import MaxIoUAssigner
 from .multi_instance_assigner import MultiInstanceAssigner
 from .point_assigner import PointAssigner

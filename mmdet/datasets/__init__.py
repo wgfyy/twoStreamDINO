@@ -10,6 +10,7 @@ from .coco_caption import CocoCaptionDataset
 from .dual_modal_coco import DualModalCocoDataset
 from .dual_modal_dota import (DualModalDOTADataset, DualModalDOTAv15Dataset,
                               DualModalDOTAv2Dataset)
+from .dual_modal_rotated_dota import DualModalRotatedDOTADataset
 from .coco_panoptic import CocoPanopticDataset
 from .coco_semantic import CocoSegDataset
 from .crowdhuman import CrowdHumanDataset
