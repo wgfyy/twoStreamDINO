@@ -8,20 +8,19 @@ conda activate mmdet
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
 # 基础配置
-CONFIG="configs/dino/dual_stream_dino_r50-12e_M4SAR6cls.py"
-WORK_DIR="work_dirs/dual_stream_dino_r50-12e_M4SAR6cls-adaptivemultiscale3-GN_8gpu"
+CONFIG="configs/dino/dual_stream_dino_r50-50e_M4SAR6cls.py"
+WORK_DIR="work_dirs/dual_stream_dino_r50-50e_M4SAR6cls-adaptivemultiscale3-GN_8gpu"
 GPUS=8
 PORT=29600
 
 echo "=========================================="
 echo "启动 8卡 RTX 5090 全速训练"
-echo "Effective Batch Size: 32 (8 GPUs * 4 Imgs)"
+echo "Effective Batch Size: 48 (8 GPUs * 6 Imgs)"
 echo "------------------------------------------"
 echo "参数调整:"
 echo "1. Accumulative Counts: 1 (关闭累积)"
-echo "2. Learning Rate: 0.0004 (线性缩放 2x)"
-echo "3. Num Workers: 10 (适配 128 核 CPU)"
-echo "4. Log Interval: 10 (适应快速迭代)"
+echo "2. Learning Rate: 0.0003 (微调减半)"
+echo "3. Num Workers: 10 (降低 worker 防止验证死锁)"
 echo "=========================================="
 
 # 动态参数覆盖
@@ -33,7 +32,7 @@ echo "=========================================="
 #    故需降为 200 (约1个epoch)。
 # train_dataloader.num_workers=10 : 适配128核CPU (10 workers * 8 GPUs = 80进程，保留48核给训练主进程和系统，避免抢占)
 # default_hooks.logger.interval=10 : 提高日志频率
-CFG_OPTIONS="--cfg-options optim_wrapper.accumulative_counts=1 optim_wrapper.optimizer.lr=0.0004 param_scheduler.0.end=200 train_dataloader.num_workers=10 default_hooks.logger.interval=10"
+CFG_OPTIONS="--cfg-options optim_wrapper.accumulative_counts=1 optim_wrapper.optimizer.lr=0.0003 param_scheduler.0.end=500 train_dataloader.num_workers=10"
 
 # 启动训练
 bash tools/dist_train.sh $CONFIG $GPUS --work-dir $WORK_DIR $CFG_OPTIONS

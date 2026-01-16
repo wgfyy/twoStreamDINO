@@ -14,8 +14,8 @@ PORT=${PORT:-29501} # 稍微改个端口避免冲突
 export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
 # 配置文件 (与 start_training.sh 保持一致)
-CONFIG="configs/dino/dual_stream_dino_r50-36e_dota5cls.py"
-WORK_DIR="work_dirs/dual_stream_dino_r50-12e_dota5cls"
+CONFIG="configs/dino/dual_stream_dino_r50-12e_M4SAR6cls.py"
+WORK_DIR="work_dirs/dual_stream_dino_r50-12e_M4SAR6cls-adaptivemultiscale3-GN-2gpus"
 
 echo "=========================================="
 echo "双流DINO分布式训练 - 可见光+SAR融合检测"

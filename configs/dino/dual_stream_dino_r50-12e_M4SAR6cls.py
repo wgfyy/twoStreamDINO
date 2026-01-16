@@ -13,13 +13,13 @@ _base_ = ['../_base_/default_runtime.py']
 # 从头训练（与Baseline条件一致，公平对比）
 # 如需迁移学习，取消下面注释：
 # load_from = 'work_dirs/dual_stream_dino_r50-36e_dota5cls/epoch_36.pth'
-load_from = None
+load_from = 'work_dirs/dual_stream_dino_r50-12e_M4SAR6cls-adaptivemultiscale3-GN_8gpu/epoch_12.pth'
 
 # ==================== 数据集类别定义 ====================
 # DOTA数据集的5个目标类别
 # CLASSES = ('plane', 'ship', 'harbor', 'bridge', 'helicopter')
 # M4-SAR dual-modal dataset 的6个目标类别
-CLASSES = ('bridge', 'harbor', 'oil_tank', 'playground', 'playground', 'wind_turbine')
+CLASSES = ('bridge', 'harbor', 'oil_tank', 'playground', 'airport', 'wind_turbine')
 num_classes = 6
 
 # ==================== 模型配置 ====================
@@ -50,11 +50,10 @@ model = dict(
         depth=50,
         num_stages=4,
         out_indices=(1, 2, 3),
-        frozen_stages=0,
+        frozen_stages=1,
         norm_cfg=dict(type='SyncBN', requires_grad=True),  # 训练BN，使用同步统计量
         norm_eval=False,   # 训练时更新BN均值方差
         style='pytorch',
-        # 注意: init_cfg 会被 load_from 覆盖，这里保留作为fallback
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
     
     # 第二个backbone (SAR)
@@ -64,7 +63,7 @@ model = dict(
         depth=50,
         num_stages=4,
         out_indices=(1, 2, 3),
-        frozen_stages=0,
+        frozen_stages=1,
         norm_cfg=dict(type='SyncBN', requires_grad=True),
         norm_eval=False,
         style='pytorch',
@@ -284,8 +283,8 @@ test_pipeline = [
 
 # 数据加载器配置
 train_dataloader = dict(
-    batch_size=4,  # 32G显存可尝试增加到4或更高
-    num_workers=16, # 增加workers以匹配更快的GPU吞吐
+    batch_size=6,  # 32G显存可尝试增加到4或更高
+    num_workers=4, # 降低num_workers防止过多进程导致挂起 (8卡x4=32进程)
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     batch_sampler=dict(type='AspectRatioBatchSampler'),
@@ -303,8 +302,8 @@ train_dataloader = dict(
         backend_args=backend_args))
 
 val_dataloader = dict(
-    batch_size=4,  # 验证推理不涉及梯度及优化器状态，显存占用较小，可大胆提升
-    num_workers=16,
+    batch_size=16,  # 验证推理不涉及梯度及优化器状态，显存占用较小，可大胆提升
+    num_workers=4,
     persistent_workers=True,
     drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
@@ -312,7 +311,7 @@ val_dataloader = dict(
         type=dataset_type,
         metainfo=dict(classes=CLASSES),
         data_root=data_root,
-        ann_file='annotations/val.json',
+        ann_file='annotations/val_small.json',
         data_prefix=dict(
             img='images/optical/val/',
             img2='images/sar/val/'
@@ -322,8 +321,8 @@ val_dataloader = dict(
         backend_args=backend_args))
 
 test_dataloader = dict(
-    batch_size=4,  # 验证推理不涉及梯度及优化器状态，显存占用较小，可大胆提升
-    num_workers=16,
+    batch_size=16,  # 验证推理不涉及梯度及优化器状态，显存占用较小，可大胆提升
+    num_workers=4,
     persistent_workers=True,
     drop_last=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
@@ -343,28 +342,30 @@ test_dataloader = dict(
 # 评估器
 val_evaluator = dict(
     type='CocoMetric',
-    ann_file=data_root + 'annotations/val.json',
+    ann_file=data_root + 'annotations/val_small.json',
     metric='bbox',
     format_only=False,
     backend_args=backend_args)
 
-test_evaluator = val_evaluator
+test_evaluator = dict(
+    type='CocoMetric',
+    ann_file=data_root + 'annotations/test.json',
+    metric='bbox',
+    format_only=False,
+    backend_args=backend_args)
 
 # ==================== 训练配置 ====================
 # 使用FP32训练保证数值稳定性
-# 差异化学习率策略:
-#   - backbone (可见光): lr_mult=0.1，预训练特征已适配，轻微微调
-#   - backbone2 (SAR): lr_mult=0.5，SAR特征差异大，需要更多学习
 optim_wrapper = dict(
     type='OptimWrapper',  # 使用FP32训练
     optimizer=dict(
         type='AdamW',
-        lr=0.0002,  # 基础学习率
+        lr=0.0006,  # 基础学习率
         weight_decay=0.0001),
     clip_grad=dict(max_norm=0.1, norm_type=2),
     # 梯度累积: 调整为2，保持 effective_batch_size = 4 * 2 = 8 不变
     # 原并不是: batch=2, accum=4 => effective=8
-    accumulative_counts=2,
+    accumulative_counts=1,
     paramwise_cfg=dict(
         custom_keys={
             # backbone已完全冻结(frozen_stages=4)，这里的lr_mult实际上不会生效
@@ -408,7 +409,7 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=50),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=2),
+    checkpoint=dict(type='CheckpointHook', interval=1, max_keep_ckpts=3, save_best='coco/bbox_mAP', rule='greater'),
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='DetVisualizationHook'))
 

@@ -5,6 +5,28 @@ import os.path as osp
 import warnings
 from copy import deepcopy
 
+# ==========================================================
+# 【新增补丁】解决 PyTorch 2.6+ 报错 "Weights only load failed"
+# ==========================================================
+import torch
+try:
+    # 备份原有的 torch.load
+    _original_torch_load = torch.load
+    
+    # 定义一个新的 load 函数，强制 weights_only=False
+    def _patched_torch_load(*args, **kwargs):
+        # 如果调用者没有指定 weights_only，我们强制设为 False
+        if 'weights_only' not in kwargs:
+            kwargs['weights_only'] = False
+        return _original_torch_load(*args, **kwargs)
+    
+    # 用我们的函数覆盖掉官方的
+    torch.load = _patched_torch_load
+    print("【系统提示】已自动修补 PyTorch 2.6+ 的 checkpoint 加载限制。")
+except Exception as e:
+    print(f"【系统警告】修补 torch.load 失败，如果遇到加载错误请忽略此警告: {e}")
+# ==========================================================
+
 from mmengine import ConfigDict
 from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
@@ -13,6 +35,7 @@ from mmdet.engine.hooks.utils import trigger_visualization_hook
 from mmdet.evaluation import DumpDetResults
 from mmdet.registry import RUNNERS
 from mmdet.utils import setup_cache_size_limit_of_dynamo
+
 
 
 # TODO: support fuse_conv_bn and format_only
