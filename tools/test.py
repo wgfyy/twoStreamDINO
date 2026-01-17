@@ -144,6 +144,12 @@ def draw_single_sample(sample_data, show_dir, classes):
             
         # Helper method for drawing
         def draw_panel(img, instances, is_gt=True, score_thr=0.3):
+            # Workaround: DetLocalVisualizer expects bboxes to be tensor for .sum() check
+            # but sometimes gets HorizontalBoxes which lacks .sum()
+            if 'bboxes' in instances:
+                if hasattr(instances.bboxes, 'tensor'):
+                    instances.bboxes = instances.bboxes.tensor
+            
             visualizer.set_image(img)
             
             # Construct a dummy DataSample for visualizer
@@ -200,7 +206,9 @@ def draw_single_sample(sample_data, show_dir, classes):
         mmcv.imwrite(final_canvas, out_file)
         return True
     except Exception as e:
-        # print(f"Error drawing {sample_data.get('img_path')}: {e}")
+        print(f"Error drawing {sample_data.get('img_path')}: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def parse_args():
@@ -278,10 +286,34 @@ def main():
                                 osp.splitext(osp.basename(args.config))[0])
 
     # Configure Visualization Collector Hook
-    if args.show_num is not None and args.show_dir is not None:
+    # By default, trigger_visualization_hook uses args.show_dir to enable drawing.
+    # If using show_num, we want to disable standard drawing to avoid performance hit
+    # and use our custom post-process visualizer instead.
+    custom_show_dir = None
+    if args.show_num is not None:
+        custom_show_dir = args.show_dir
+        # We temporarily unset args.show_dir so trigger_visualization_hook doesn't enable default drawing
+        # But we keep it in custom_show_dir for our use.
+        # However, trigger_visualization_hook calculates work_dir/timestamp/show_dir if show_dir is NOT None.
+        # If we set it to None, it won't calculate that path.
+        # So we let it run, then FORCE disable it.
+        pass
+
+    cfg.load_from = args.checkpoint
+
+    if args.show or args.show_dir:
+        cfg = trigger_visualization_hook(cfg, args)
+    
+    # NOW we override the visualization hook if show_num is active
+    if args.show_num is not None and custom_show_dir is not None:
+        # 1. Disable default visualization drawing
         if 'visualization' in cfg.default_hooks:
-            cfg.default_hooks.visualization.draw = False 
+            cfg.default_hooks.visualization.draw = False
         
+        # Also check if there's a custom visualization hook added by trigger_visualization_hook
+        # Usually it modifies default_hooks.visualization
+        
+        # 2. Add our Collector Hook
         custom_hook_cfg = dict(
             type='DualModalVisCollectorHook',
             show_num=args.show_num,
@@ -291,14 +323,13 @@ def main():
             cfg.custom_hooks = []
         cfg.custom_hooks.append(custom_hook_cfg)
         
-        # Ensure show_dir exists
-        if not os.path.exists(args.show_dir):
-            os.makedirs(args.show_dir)
-
-    cfg.load_from = args.checkpoint
-
-    if args.show or args.show_dir:
-        cfg = trigger_visualization_hook(cfg, args)
+        # Ensure show_dir exists (use the one potentially modified by user or calculate it ourselves if needed)
+        # Note: args.show_dir might be relative.
+        if not os.path.exists(custom_show_dir):
+            os.makedirs(custom_show_dir)
+            
+        print(f"[Config] Disabled standard visualization. Using custom collector for {args.show_num} samples.")
+        print(f"[Config] Custom visualization output: {custom_show_dir}")
 
     if args.tta:
 
@@ -374,7 +405,7 @@ def main():
         # However, reusing MM/Torch objects across processes can be tricky.
         # We converted instances to CPU Tensors, which should pickle fine.
         
-        num_workers = max(1, multiprocessing.cpu_count() - 2)
+        num_workers = min(multiprocessing.cpu_count(), 32)
         print(f"[Post-Process] Spawning {num_workers} workers.")
         
         try:
