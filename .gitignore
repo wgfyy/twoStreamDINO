@@ -121,3 +121,9 @@ work_dirs/
 *.pth
 *.py~
 *.sh~
+
+# pictures
+*.png
+*.jpg
+*.jpeg
+*.gif

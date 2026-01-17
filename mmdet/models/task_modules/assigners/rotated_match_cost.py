@@ -6,7 +6,7 @@ from mmengine.structures import InstanceData
 from torch import Tensor
 
 from mmdet.registry import TASK_UTILS
-from mmdet.models.task_modules.assigners.match_costs.match_cost import BaseMatchCost
+from .match_cost import BaseMatchCost
 
 try:
     from mmcv.ops import box_iou_rotated
