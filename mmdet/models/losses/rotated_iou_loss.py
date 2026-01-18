@@ -38,7 +38,8 @@ def rotated_iou_loss(pred: Tensor,
     # diff_iou_rotated_2d calculates IoU (differentiable)
     # It expects (x, y, w, h, a)
     ious = diff_iou_rotated_2d(pred.unsqueeze(0), target.unsqueeze(0)).squeeze(0)
-    ious = torch.clamp(ious, min=0, max=1.0)
+    # Clamp ious to avoid log(0) = -inf
+    ious = torch.clamp(ious, min=eps, max=1.0)
     
     if linear:
         loss = 1 - ious

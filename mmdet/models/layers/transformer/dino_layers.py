@@ -71,19 +71,23 @@ class DinoTransformerDecoder(DeformableDetrTransformerDecoder):
         intermediate = []
         intermediate_reference_points = [reference_points]
         for lid, layer in enumerate(self.layers):
-            if reference_points.shape[-1] == 4:
+            # For OBB (5-dim), only use the first 4 dims (cx, cy, w, h) for 
+            # reference point processing; angle is handled separately
+            ref_pts_for_attn = reference_points[..., :4] if reference_points.shape[-1] > 4 else reference_points
+            
+            if ref_pts_for_attn.shape[-1] == 4:
                 reference_points_input = \
-                    reference_points[:, :, None] * torch.cat(
+                    ref_pts_for_attn[:, :, None] * torch.cat(
                         [valid_ratios, valid_ratios], -1)[:, None]
             else:
-                assert reference_points.shape[-1] == 2
+                assert ref_pts_for_attn.shape[-1] == 2
                 reference_points_input = \
-                    reference_points[:, :, None] * valid_ratios[:, None]
+                    ref_pts_for_attn[:, :, None] * valid_ratios[:, None]
 
             query_sine_embed = coordinate_to_encoding(
                 reference_points_input[:, :, 0, :])
             query_pos = self.ref_point_head(query_sine_embed)
-
+                    
             query = layer(
                 query,
                 query_pos=query_pos,
@@ -98,7 +102,20 @@ class DinoTransformerDecoder(DeformableDetrTransformerDecoder):
 
             if reg_branches is not None:
                 tmp = reg_branches[lid](query)
-                assert reference_points.shape[-1] == 4
+                # Support both 4-dim (standard) and 5-dim (OBB) reference points
+                box_dim = reference_points.shape[-1]
+                if tmp.shape[-1] != box_dim:
+                    # reg_branches outputs different dim than reference_points
+                    # This can happen in OBB mode where references are 5-dim
+                    # but reg_branches output 4-dim (before head's custom handling)
+                    # In this case, only update the matching dimensions
+                    if tmp.shape[-1] < box_dim:
+                        # Pad tmp with zeros for angle dimension
+                        tmp = torch.cat([tmp, torch.zeros_like(reference_points[..., tmp.shape[-1]:])], dim=-1)
+                    else:
+                        # Truncate tmp if it's larger
+                        tmp = tmp[..., :box_dim]
+                
                 new_reference_points = tmp + inverse_sigmoid(
                     reference_points, eps=1e-3)
                 new_reference_points = new_reference_points.sigmoid()
@@ -560,3 +577,207 @@ class CdnQueryGenerator(BaseModule):
             attn_mask[row_scope, right_scope] = True
             attn_mask[row_scope, left_scope] = True
         return attn_mask
+
+
+class CdnQueryGeneratorOBB(CdnQueryGenerator):
+    """CDN Query Generator for Oriented Bounding Box (OBB) detection.
+    
+    This class extends CdnQueryGenerator to support 5-dim OBB format
+    (cx, cy, w, h, angle) in addition to the standard 4-dim HBB format.
+    
+    The key differences from the base class:
+    1. Normalization factor is 5-dim for OBB: [img_w, img_h, img_w, img_h, 1.0]
+       where the last dimension (angle) is not normalized by image size.
+    2. Noise is added to all 5 dimensions, with angle noise scaled appropriately.
+    """
+    
+    def __call__(self, batch_data_samples: SampleList) -> tuple:
+        """Generate contrastive denoising (cdn) queries with ground truth.
+        
+        Supports both 4-dim HBB (cx, cy, w, h) and 5-dim OBB (cx, cy, w, h, angle).
+        """
+        # normalize bbox and collate ground truth (gt)
+        gt_labels_list = []
+        gt_bboxes_list = []
+        box_dim = None
+        
+        for sample in batch_data_samples:
+            img_h, img_w = sample.img_shape
+            bboxes = sample.gt_instances.bboxes
+            
+            # Detect box dimension (4 for HBB, 5 for OBB)
+            if box_dim is None:
+                box_dim = bboxes.shape[-1]
+            
+            # Create normalization factor based on box dimension
+            if box_dim == 5:
+                # OBB: [img_w, img_h, img_w, img_h, 1.0]
+                # Angle is already normalized (typically in radians or [0, 1])
+                factor = bboxes.new_tensor([img_w, img_h, img_w, img_h, 1.0]).unsqueeze(0)
+            else:
+                # HBB: [img_w, img_h, img_w, img_h]
+                factor = bboxes.new_tensor([img_w, img_h, img_w, img_h]).unsqueeze(0)
+            
+            bboxes_normalized = bboxes / factor
+            gt_bboxes_list.append(bboxes_normalized)
+            gt_labels_list.append(sample.gt_instances.labels)
+        
+        gt_labels = torch.cat(gt_labels_list)
+        gt_bboxes = torch.cat(gt_bboxes_list)
+
+        num_target_list = [len(bboxes) for bboxes in gt_bboxes_list]
+        max_num_target = max(num_target_list)
+        num_groups = self.get_num_groups(max_num_target)
+
+        dn_label_query = self.generate_dn_label_query(gt_labels, num_groups)
+        
+        # Use OBB-aware bbox query generation
+        if box_dim == 5:
+            dn_bbox_query = self.generate_dn_bbox_query_obb(gt_bboxes, num_groups)
+        else:
+            dn_bbox_query = self.generate_dn_bbox_query(gt_bboxes, num_groups)
+
+        # The `batch_idx` saves the batch index of the corresponding sample
+        batch_idx = torch.cat([
+            torch.full_like(t.long(), i) for i, t in enumerate(gt_labels_list)
+        ])
+        dn_label_query, dn_bbox_query = self.collate_dn_queries(
+            dn_label_query, dn_bbox_query, batch_idx, len(batch_data_samples),
+            num_groups)
+
+        attn_mask = self.generate_dn_mask(
+            max_num_target, num_groups, device=dn_label_query.device)
+
+        dn_meta = dict(
+            num_denoising_queries=int(max_num_target * 2 * num_groups),
+            num_denoising_groups=num_groups)
+
+        return dn_label_query, dn_bbox_query, attn_mask, dn_meta
+
+    def generate_dn_bbox_query_obb(self, gt_bboxes: Tensor,
+                                    num_groups: int) -> Tensor:
+        """Generate noisy OBB bboxes and their query embeddings.
+        
+        For OBB format (cx, cy, w, h, angle), we add noise to all 5 dimensions.
+        The noise strategy is similar to the HBB version but adapted for OBB:
+        - Position (cx, cy) noise is scaled by (w, h)
+        - Size (w, h) noise is scaled by (w, h)  
+        - Angle noise is scaled by a fixed factor (e.g., box_noise_scale * 0.5)
+        
+        Args:
+            gt_bboxes (Tensor): The concatenated gt bboxes, has shape 
+                (num_target_total, 5) with format (cx, cy, w, h, angle).
+            num_groups (int): The number of denoising query groups.
+            
+        Returns:
+            Tensor: The output noisy bboxes embedded by inverse_sigmoid,
+                has shape (num_noisy_targets, 5).
+        """
+        assert self.box_noise_scale > 0
+        device = gt_bboxes.device
+        
+        # gt_bboxes is already normalized: (cx, cy, w, h, angle)
+        # where cx, cy, w, h are in [0, 1] and angle is typically in [-pi/2, pi/2] or [0, 1]
+        
+        # expand gt_bboxes as groups
+        gt_bboxes_expand = gt_bboxes.repeat(2 * num_groups, 1)  # (N*2*G, 5)
+        
+        # obtain index of negative queries
+        positive_idx = torch.arange(
+            len(gt_bboxes), dtype=torch.long, device=device)
+        positive_idx = positive_idx.unsqueeze(0).repeat(num_groups, 1)
+        positive_idx += 2 * len(gt_bboxes) * torch.arange(
+            num_groups, dtype=torch.long, device=device)[:, None]
+        positive_idx = positive_idx.flatten()
+        negative_idx = positive_idx + len(gt_bboxes)
+        
+        # Extract components
+        cx = gt_bboxes_expand[:, 0:1]
+        cy = gt_bboxes_expand[:, 1:2]
+        w = gt_bboxes_expand[:, 2:3]
+        h = gt_bboxes_expand[:, 3:4]
+        angle = gt_bboxes_expand[:, 4:5]
+        
+        # Generate random noise for position and size (similar to HBB)
+        rand_sign = torch.randint_like(
+            gt_bboxes_expand[:, :4], low=0, high=2,
+            dtype=torch.float32) * 2.0 - 1.0
+        
+        rand_part = torch.rand_like(gt_bboxes_expand[:, :4])
+        rand_part[negative_idx] += 1.0
+        rand_part *= rand_sign
+        
+        # Scale factors for position and size noise
+        # For (cx, cy), scale by (w, h); for (w, h), scale by (w, h)
+        scale_factors = torch.cat([w, h, w, h], dim=1)
+        
+        # Add noise to position and size
+        noisy_cxcywh = gt_bboxes_expand[:, :4] + torch.mul(
+            rand_part, scale_factors) * self.box_noise_scale / 2
+        # Clamp to [0.001, 0.999] to avoid inverse_sigmoid issues
+        noisy_cxcywh = noisy_cxcywh.clamp(min=0.001, max=0.999)
+        
+        # Add noise to angle
+        # Angle noise: small perturbation, scaled by box_noise_scale
+        # Angle range is [-pi/2, pi/2] radians after flipping, normalize to [0, 1]
+        # Mapping: -pi/2 -> 0, pi/2 -> 1
+        PI_HALF = 1.5707963267948966  # pi/2
+        
+        # Normalize angle from [-pi/2, pi/2] to [0, 1]
+        angle_normalized = (angle + PI_HALF) / (2 * PI_HALF)
+        # Clamp to avoid exactly 0 or 1 (which cause issues with inverse_sigmoid)
+        angle_normalized = angle_normalized.clamp(min=0.001, max=0.999)
+        
+        angle_rand_sign = torch.randint_like(
+            angle_normalized, low=0, high=2, dtype=torch.float32) * 2.0 - 1.0
+        angle_rand_part = torch.rand_like(angle_normalized)
+        angle_rand_part[negative_idx] += 1.0
+        angle_rand_part *= angle_rand_sign
+        
+        # Scale angle noise (smaller scale since angle is sensitive)
+        noisy_angle = angle_normalized + angle_rand_part * self.box_noise_scale * 0.1
+        # Clamp angle to valid range [0.001, 0.999] to avoid inverse_sigmoid issues
+        noisy_angle = noisy_angle.clamp(min=0.001, max=0.999)
+        
+        # Combine all components
+        noisy_bboxes_expand = torch.cat([noisy_cxcywh, noisy_angle], dim=1)
+        
+        # Apply inverse sigmoid
+        dn_bbox_query = inverse_sigmoid(noisy_bboxes_expand, eps=1e-3)
+        return dn_bbox_query
+
+    def collate_dn_queries(self, input_label_query: Tensor,
+                           input_bbox_query: Tensor, batch_idx: Tensor,
+                           batch_size: int, num_groups: int) -> Tuple[Tensor]:
+        """Collate generated queries to obtain batched dn queries.
+        
+        Overridden to support 5-dim OBB format.
+        """
+        device = input_label_query.device
+        num_target_list = [
+            torch.sum(batch_idx == idx) for idx in range(batch_size)
+        ]
+        max_num_target = max(num_target_list)
+        num_denoising_queries = int(max_num_target * 2 * num_groups)
+
+        map_query_index = torch.cat([
+            torch.arange(num_target, device=device)
+            for num_target in num_target_list
+        ])
+        map_query_index = torch.cat([
+            map_query_index + max_num_target * i for i in range(2 * num_groups)
+        ]).long()
+        batch_idx_expand = batch_idx.repeat(2 * num_groups, 1).view(-1)
+        mapper = (batch_idx_expand, map_query_index)
+
+        batched_label_query = torch.zeros(
+            batch_size, num_denoising_queries, self.embed_dims, device=device)
+        
+        # Determine box dimension from input (4 for HBB, 5 for OBB)
+        box_dim = input_bbox_query.shape[-1]
+        batched_bbox_query = torch.zeros(
+            batch_size, num_denoising_queries, box_dim, device=device)
+
+        batched_label_query[mapper] = input_label_query
+        batched_bbox_query[mapper] = input_bbox_query
+        return batched_label_query, batched_bbox_query

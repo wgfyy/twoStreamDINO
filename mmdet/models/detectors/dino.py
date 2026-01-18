@@ -8,7 +8,8 @@ from torch.nn.init import normal_
 from mmdet.registry import MODELS
 from mmdet.structures import OptSampleList
 from mmdet.utils import OptConfigType
-from ..layers import (CdnQueryGenerator, DeformableDetrTransformerEncoder,
+from ..layers import (CdnQueryGenerator, CdnQueryGeneratorOBB,
+                      DeformableDetrTransformerEncoder,
                       DinoTransformerDecoder, SinePositionalEncoding)
 from .deformable_detr import DeformableDETR, MultiScaleDeformableAttention
 
@@ -31,6 +32,20 @@ class DINO(DeformableDETR):
         assert self.as_two_stage, 'as_two_stage must be True for DINO'
         assert self.with_box_refine, 'with_box_refine must be True for DINO'
 
+        # Whether to use OBB (Oriented Bounding Box) mode with 5-dim boxes
+        # Check from dn_cfg if provided, otherwise check bbox_head type
+        self.use_obb = False
+        
+        # Check if bbox_head is for OBB (e.g., RotatedDINOHead outputs 5-dim)
+        # This is determined by checking the output dimension of reg_branches
+        try:
+            # reg_branches output dimension indicates OBB mode
+            test_input = torch.zeros(1, self.embed_dims)
+            test_output = self.bbox_head.reg_branches[0](test_input)
+            self.use_obb = test_output.shape[-1] == 5
+        except:
+            pass
+        
         if dn_cfg is not None:
             assert 'num_classes' not in dn_cfg and \
                    'num_queries' not in dn_cfg and \
@@ -41,7 +56,14 @@ class DINO(DeformableDETR):
             dn_cfg['num_classes'] = self.bbox_head.num_classes
             dn_cfg['embed_dims'] = self.embed_dims
             dn_cfg['num_matching_queries'] = self.num_queries
-        self.dn_query_generator = CdnQueryGenerator(**dn_cfg)
+            
+            # Support OBB denoising query generator via 'obb' flag
+            obb_flag = dn_cfg.pop('obb', False)
+            if obb_flag:
+                self.use_obb = True  # Explicitly set OBB mode
+                self.dn_query_generator = CdnQueryGeneratorOBB(**dn_cfg)
+            else:
+                self.dn_query_generator = CdnQueryGenerator(**dn_cfg)
 
     def _init_layers(self) -> None:
         """Initialize layers except for backbone, neck and bbox_head."""
@@ -168,8 +190,20 @@ class DINO(DeformableDETR):
         enc_outputs_class = self.bbox_head.cls_branches[
             self.decoder.num_layers](
                 output_memory)
-        enc_outputs_coord_unact = self.bbox_head.reg_branches[
-            self.decoder.num_layers](output_memory) + output_proposals
+        
+        # For OBB mode, reg_branches output 5-dim but output_proposals is 4-dim
+        # We need to pad output_proposals with zeros for angle dimension
+        reg_output = self.bbox_head.reg_branches[
+            self.decoder.num_layers](output_memory)
+        if self.use_obb and reg_output.shape[-1] > output_proposals.shape[-1]:
+            # Pad output_proposals with zeros for angle dimension
+            angle_padding = torch.zeros(
+                *output_proposals.shape[:-1],
+                reg_output.shape[-1] - output_proposals.shape[-1],
+                device=output_proposals.device,
+                dtype=output_proposals.dtype)
+            output_proposals = torch.cat([output_proposals, angle_padding], dim=-1)
+        enc_outputs_coord_unact = reg_output + output_proposals
 
         # NOTE The DINO selects top-k proposals according to scores of
         # multi-class classification, while DeformDETR, where the input
@@ -180,21 +214,56 @@ class DINO(DeformableDETR):
         topk_score = torch.gather(
             enc_outputs_class, 1,
             topk_indices.unsqueeze(-1).repeat(1, 1, cls_out_features))
+        
+        # Determine box dimension from reg_branches output
+        # For standard DINO: 4 (cx, cy, w, h)
+        # For OBB DINO: could be 4 (we'll pad angle) or 5
+        box_dim = enc_outputs_coord_unact.shape[-1]  # Usually 4
         topk_coords_unact = torch.gather(
             enc_outputs_coord_unact, 1,
-            topk_indices.unsqueeze(-1).repeat(1, 1, 4))
+            topk_indices.unsqueeze(-1).repeat(1, 1, box_dim))
         topk_coords = topk_coords_unact.sigmoid()
         topk_coords_unact = topk_coords_unact.detach()
 
         query = self.query_embedding.weight[:, None, :]
         query = query.repeat(1, bs, 1).transpose(0, 1)
-        if self.training:
+        if self.training and hasattr(self, 'dn_query_generator'):
             dn_label_query, dn_bbox_query, dn_mask, dn_meta = \
                 self.dn_query_generator(batch_data_samples)
             query = torch.cat([dn_label_query, query], dim=1)
+            
+            # For OBB mode: dn_bbox_query is 5-dim, topk_coords_unact is 4-dim
+            # We need to pad topk_coords_unact with angle dimension (0 = no rotation)
+            if self.use_obb and dn_bbox_query.shape[-1] > topk_coords_unact.shape[-1]:
+                # Pad topk_coords_unact with zeros for angle dimension
+                angle_padding = torch.zeros(
+                    *topk_coords_unact.shape[:-1], 
+                    dn_bbox_query.shape[-1] - topk_coords_unact.shape[-1],
+                    device=topk_coords_unact.device,
+                    dtype=topk_coords_unact.dtype)
+                topk_coords_unact = torch.cat([topk_coords_unact, angle_padding], dim=-1)
+            
             reference_points = torch.cat([dn_bbox_query, topk_coords_unact],
                                          dim=1)
+        elif self.training:
+            # Training but no denoising: use only matching queries
+            # For OBB mode, also pad with angle dimension
+            if self.use_obb:
+                angle_padding = torch.zeros(
+                    *topk_coords_unact.shape[:-1], 1,
+                    device=topk_coords_unact.device,
+                    dtype=topk_coords_unact.dtype)
+                topk_coords_unact = torch.cat([topk_coords_unact, angle_padding], dim=-1)
+            reference_points = topk_coords_unact
+            dn_mask, dn_meta = None, None
         else:
+            # For inference in OBB mode, also pad with angle dimension
+            if self.use_obb:
+                angle_padding = torch.zeros(
+                    *topk_coords_unact.shape[:-1], 1,
+                    device=topk_coords_unact.device,
+                    dtype=topk_coords_unact.dtype)
+                topk_coords_unact = torch.cat([topk_coords_unact, angle_padding], dim=-1)
             reference_points = topk_coords_unact
             dn_mask, dn_meta = None, None
         reference_points = reference_points.sigmoid()

@@ -10,7 +10,7 @@ from .deformable_detr_layers import (DeformableDetrTransformerDecoder,
                                      DeformableDetrTransformerEncoderLayer)
 from .detr_layers import (DetrTransformerDecoder, DetrTransformerDecoderLayer,
                           DetrTransformerEncoder, DetrTransformerEncoderLayer)
-from .dino_layers import CdnQueryGenerator, DinoTransformerDecoder
+from .dino_layers import CdnQueryGenerator, CdnQueryGeneratorOBB, DinoTransformerDecoder
 from .mask2former_layers import (Mask2FormerTransformerDecoder,
                                  Mask2FormerTransformerDecoderLayer,
                                  Mask2FormerTransformerEncoder)
@@ -30,6 +30,6 @@ __all__ = [
     'DABDetrTransformerDecoder', 'DABDetrTransformerEncoder',
     'ConditionalDetrTransformerDecoder',
     'ConditionalDetrTransformerDecoderLayer', 'DinoTransformerDecoder',
-    'CdnQueryGenerator', 'Mask2FormerTransformerEncoder',
+    'CdnQueryGenerator', 'CdnQueryGeneratorOBB', 'Mask2FormerTransformerEncoder',
     'Mask2FormerTransformerDecoderLayer', 'Mask2FormerTransformerDecoder'
 ]

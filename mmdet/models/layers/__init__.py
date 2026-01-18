@@ -18,6 +18,7 @@ from .res_layer import ResLayer, SimplifiedBasicBlock
 from .se_layer import ChannelAttention, DyReLU, SELayer
 # yapf: disable
 from .transformer import (MLP, AdaptivePadding, CdnQueryGenerator,
+                          CdnQueryGeneratorOBB,
                           ConditionalAttention,
                           ConditionalDetrTransformerDecoder,
                           ConditionalDetrTransformerDecoderLayer,
@@ -57,7 +58,7 @@ __all__ = [
     'DABDetrTransformerDecoderLayer', 'DABDetrTransformerDecoder',
     'DABDetrTransformerEncoder', 'ConditionalDetrTransformerDecoder',
     'ConditionalDetrTransformerDecoderLayer', 'DinoTransformerDecoder',
-    'CdnQueryGenerator', 'Mask2FormerTransformerEncoder',
+    'CdnQueryGenerator', 'CdnQueryGeneratorOBB', 'Mask2FormerTransformerEncoder',
     'Mask2FormerTransformerDecoderLayer', 'Mask2FormerTransformerDecoder',
     'SinePositionalEncoding3D'
 ]

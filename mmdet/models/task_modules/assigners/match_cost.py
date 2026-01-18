@@ -461,3 +461,67 @@ class CrossEntropyLossCost(BaseMatchCost):
             raise NotImplementedError
 
         return cls_cost * self.weight
+
+
+@TASK_UTILS.register_module()
+class RotatedBBoxL1Cost(BaseMatchCost):
+    """L1 cost for Oriented Bounding Boxes (OBB).
+    
+    Computes L1 distance between predicted and ground truth OBB boxes
+    in normalized (cx, cy, w, h, angle) format.
+    
+    Args:
+        weight (Union[float, int]): Cost weight. Defaults to 1.
+        
+    Examples:
+        >>> from mmdet.models.task_modules.assigners import RotatedBBoxL1Cost
+        >>> from mmengine.structures import InstanceData
+        >>> import torch
+        >>> pred = InstanceData(bboxes=torch.rand(10, 5))  # (cx, cy, w, h, angle)
+        >>> gt = InstanceData(bboxes=torch.rand(5, 5))
+        >>> cost = RotatedBBoxL1Cost()
+        >>> result = cost(pred, gt, img_meta=dict(img_shape=(100, 100)))
+    """
+    
+    def __init__(self, weight: Union[float, int] = 1.) -> None:
+        super().__init__(weight=weight)
+    
+    def __call__(self,
+                 pred_instances: InstanceData,
+                 gt_instances: InstanceData,
+                 img_meta: Optional[dict] = None,
+                 **kwargs) -> Tensor:
+        """Compute L1 cost for OBB boxes.
+        
+        Args:
+            pred_instances (:obj:`InstanceData`): Predicted instances with 
+                ``bboxes`` in (cx, cy, w, h, angle) format, unnormalized.
+            gt_instances (:obj:`InstanceData`): GT instances with ``bboxes``
+                in (cx, cy, w, h, angle) format, unnormalized.
+            img_meta (Optional[dict]): Image information containing 'img_shape'.
+            
+        Returns:
+            Tensor: Match cost matrix of shape (num_preds, num_gts).
+        """
+        pred_bboxes = pred_instances.bboxes  # (N, 5)
+        gt_bboxes = gt_instances.bboxes  # (M, 5)
+        
+        # Normalize by image size
+        # For OBB (cx, cy, w, h, angle): normalize cx, cy, w, h by image size
+        # angle is in [-pi/2, pi/2] radians, normalize to [0, 1]
+        # Mapping: -pi/2 -> 0, pi/2 -> 1
+        PI_HALF = 1.5707963267948966  # pi/2
+        img_h, img_w = img_meta['img_shape']
+        
+        # Normalize spatial dimensions by image size
+        pred_bboxes_norm = pred_bboxes.clone()
+        pred_bboxes_norm[..., :4] = pred_bboxes[..., :4] / pred_bboxes.new_tensor([img_w, img_h, img_w, img_h])
+        pred_bboxes_norm[..., 4:5] = (pred_bboxes[..., 4:5] + PI_HALF) / (2 * PI_HALF)  # normalize angle to [0, 1]
+        
+        gt_bboxes_norm = gt_bboxes.clone()
+        gt_bboxes_norm[..., :4] = gt_bboxes[..., :4] / gt_bboxes.new_tensor([img_w, img_h, img_w, img_h])
+        gt_bboxes_norm[..., 4:5] = (gt_bboxes[..., 4:5] + PI_HALF) / (2 * PI_HALF)  # normalize angle to [0, 1]
+        
+        # Compute L1 cost
+        bbox_cost = torch.cdist(pred_bboxes_norm, gt_bboxes_norm, p=1)
+        return bbox_cost * self.weight
