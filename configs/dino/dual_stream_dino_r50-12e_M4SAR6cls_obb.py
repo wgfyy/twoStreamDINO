@@ -166,7 +166,7 @@ model = dict(
 dataset_type = 'DualModalRotatedDOTADataset'
 
 # 数据集路径
-data_root = '/home/wgfyy/datasets/M4-SAR-coco-OBB/'
+data_root = '/root/autodl-tmp/M4-SAR-coco-OBB/'
 
 backend_args = None
 
@@ -198,7 +198,7 @@ test_pipeline = [
 
 # 数据加载器配置
 train_dataloader = dict(
-    batch_size=1,
+    batch_size=6,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
@@ -217,7 +217,7 @@ train_dataloader = dict(
         backend_args=backend_args))
 
 val_dataloader = dict(
-    batch_size=1,
+    batch_size=16,
     num_workers=4,
     persistent_workers=True,
     drop_last=False,
@@ -236,7 +236,7 @@ val_dataloader = dict(
         backend_args=backend_args))
 
 test_dataloader = dict(
-    batch_size=1,
+    batch_size=16,
     num_workers=4,
     persistent_workers=True,
     drop_last=False,
