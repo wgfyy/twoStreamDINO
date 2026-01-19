@@ -294,7 +294,7 @@ train_dataloader = dict(
         type=dataset_type,
         metainfo=dict(classes=CLASSES),
         data_root=data_root,
-        ann_file='annotations/train.json',
+        ann_file='annotations/train_small.json',
         data_prefix=dict(
             img='images/optical/',   # 可见光图像目录
             img2='images/sar/'       # SAR图像目录

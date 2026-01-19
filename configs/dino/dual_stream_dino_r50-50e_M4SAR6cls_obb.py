@@ -12,7 +12,7 @@ param_scheduler = [
         start_factor=0.001, # 建议从更低开始 (0.1 -> 0.001)，Transformer 对初始 LR 很敏感
         by_epoch=False,
         begin=0,
-        end=2000),
+        end=1000),
     
     # 2. 切换为 CosineAnnealingLR
     dict(

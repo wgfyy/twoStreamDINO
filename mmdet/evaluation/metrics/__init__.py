@@ -17,11 +17,12 @@ from .reid_metric import ReIDMetrics
 from .semseg_metric import SemSegMetric
 from .voc_metric import VOCMetric
 from .youtube_vis_metric import YouTubeVISMetric
+from .obb_coco_metric import OBBCocoMetric
 
 __all__ = [
     'CityScapesMetric', 'CocoMetric', 'CocoPanopticMetric', 'OpenImagesMetric',
     'VOCMetric', 'LVISMetric', 'CrowdHumanMetric', 'DumpProposals',
     'CocoOccludedSeparatedMetric', 'DumpDetResults', 'BaseVideoMetric',
     'MOTChallengeMetric', 'CocoVideoMetric', 'ReIDMetrics', 'YouTubeVISMetric',
-    'COCOCaptionMetric', 'SemSegMetric', 'RefSegMetric'
+    'COCOCaptionMetric', 'SemSegMetric', 'RefSegMetric', 'OBBCocoMetric'
 ]

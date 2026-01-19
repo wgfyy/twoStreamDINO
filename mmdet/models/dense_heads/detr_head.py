@@ -597,15 +597,31 @@ class DETRHead(BaseModule):
             bbox_pred = bbox_pred[bbox_index]
             det_labels = det_labels[bbox_index]
 
-        det_bboxes = bbox_cxcywh_to_xyxy(bbox_pred)
-        det_bboxes[:, 0::2] = det_bboxes[:, 0::2] * img_shape[1]
-        det_bboxes[:, 1::2] = det_bboxes[:, 1::2] * img_shape[0]
-        det_bboxes[:, 0::2].clamp_(min=0, max=img_shape[1])
-        det_bboxes[:, 1::2].clamp_(min=0, max=img_shape[0])
-        if rescale:
-            assert img_meta.get('scale_factor') is not None
-            det_bboxes /= det_bboxes.new_tensor(
-                img_meta['scale_factor']).repeat((1, 2))
+        if bbox_pred.shape[-1] == 4:
+            det_bboxes = bbox_cxcywh_to_xyxy(bbox_pred)
+            det_bboxes[:, 0::2] = det_bboxes[:, 0::2] * img_shape[1]
+            det_bboxes[:, 1::2] = det_bboxes[:, 1::2] * img_shape[0]
+            det_bboxes[:, 0::2].clamp_(min=0, max=img_shape[1])
+            det_bboxes[:, 1::2].clamp_(min=0, max=img_shape[0])
+            if rescale:
+                assert img_meta.get('scale_factor') is not None
+                det_bboxes /= det_bboxes.new_tensor(
+                    img_meta['scale_factor']).repeat((1, 2))
+        else:
+            det_bboxes = bbox_pred
+            det_bboxes[:, 0] = det_bboxes[:, 0] * img_shape[1]
+            det_bboxes[:, 1] = det_bboxes[:, 1] * img_shape[0]
+            det_bboxes[:, 2] = det_bboxes[:, 2] * img_shape[1]
+            det_bboxes[:, 3] = det_bboxes[:, 3] * img_shape[0]
+            det_bboxes[:, 0].clamp_(min=0, max=img_shape[1])
+            det_bboxes[:, 1].clamp_(min=0, max=img_shape[0])
+            if rescale:
+                assert img_meta.get('scale_factor') is not None
+                scale_factor = det_bboxes.new_tensor(img_meta['scale_factor'])
+                det_bboxes[:, 0] /= scale_factor[0]
+                det_bboxes[:, 1] /= scale_factor[1]
+                det_bboxes[:, 2] /= scale_factor[0]
+                det_bboxes[:, 3] /= scale_factor[1]
 
         results = InstanceData()
         results.bboxes = det_bboxes

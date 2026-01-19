@@ -133,8 +133,8 @@ model = dict(
             alpha=0.25,
             loss_weight=1.0),
         loss_bbox=dict(type='L1Loss', loss_weight=5.0),
-        # 使用旋转IoU损失
-        loss_iou=dict(type='RotatedIoULoss', loss_weight=2.0)),
+        # 使用旋转IoU损失 - 增加权重以提高框的准确性
+        loss_iou=dict(type='RotatedIoULoss', loss_weight=5.0)),
     
     # 去噪配置
     # 使用 OBB 版本的 denoising query generator
@@ -157,7 +157,7 @@ model = dict(
                 # 使用支持OBB的L1 Cost
                 dict(type='RotatedBBoxL1Cost', weight=5.0),
                 # 使用旋转IoU代价
-                dict(type='RotatedIoUCost', weight=2.0)
+                dict(type='RotatedIoUCost', weight=5.0)
             ])),
     test_cfg=dict(max_per_img=300))
 
@@ -226,7 +226,7 @@ val_dataloader = dict(
         type=dataset_type,
         metainfo=dict(classes=CLASSES),
         data_root=data_root,
-        ann_file='annotations/val.json',
+        ann_file='annotations/val_small.json',
         data_prefix=dict(
             img='images/optical/val/',
             img2='images/sar/val/'
@@ -258,14 +258,14 @@ test_dataloader = dict(
 # 注意: OBB评估需要使用支持旋转框的评估器
 # 这里使用CocoMetric，但实际评估时需确保正确处理旋转框
 val_evaluator = dict(
-    type='CocoMetric',
-    ann_file=data_root + 'annotations/val.json',
+    type='OBBCocoMetric',
+    ann_file=data_root + 'annotations/val_small.json',
     metric='bbox',
     format_only=False,
     backend_args=backend_args)
 
 test_evaluator = dict(
-    type='CocoMetric',
+    type='OBBCocoMetric',
     ann_file=data_root + 'annotations/test.json',
     metric='bbox',
     format_only=False,
@@ -276,7 +276,7 @@ optim_wrapper = dict(
     type='OptimWrapper',
     optimizer=dict(
         type='AdamW',
-        lr=0.0001,  # OBB任务使用较小的学习率
+        lr=0.0004,  # 用户指定 0.0004
         weight_decay=0.0001),
     clip_grad=dict(max_norm=0.1, norm_type=2),
     accumulative_counts=1,

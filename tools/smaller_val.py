@@ -4,9 +4,9 @@ import os
 
 def generate_val_small():
     # 1. Configuration Paths
-    input_path = '/root/autodl-tmp/M4-SAR-coco-OBB/annotations/val.json'
-    output_path = '/root/autodl-tmp/M4-SAR-coco-OBB/annotations/val_small.json'
-    target_samples = 4000
+    input_path = '/root/autodl-tmp/M4-SAR-coco-OBB/annotations/train.json'
+    output_path = '/root/autodl-tmp/M4-SAR-coco-OBB/annotations/train_small.json'
+    target_samples = 1000
     
     print(f"Reading from: {input_path}")
     
